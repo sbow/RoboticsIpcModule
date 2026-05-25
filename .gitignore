@@ -1,0 +1,61 @@
+# Build outputs
+build/
+out/
+dist/
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+compile_commands.json
+
+# Make
+*.d
+
+# Test / runtime artifacts
+*.log
+core
+core.*
+vgcore.*
+perf.data*
+*.gcda
+*.gcno
+*.gcov
+coverage/
+.coverage
+
+# UDS sockets and SHM scratch (router demos)
+/tmp/cpp_tricks_*
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Python (for future bridges in examples/)
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Node (for future bridges in examples/)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
