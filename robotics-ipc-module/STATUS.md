@@ -8,7 +8,7 @@
 |-----|-------|
 | `IPC_ROOT` | `cpp_tricks/ipc` |
 | `PLANS_ROOT` | `robotics-ipc-module` |
-| Baseline tag / commit | _(fill when starting)_ |
+| Baseline tag / commit | `243ede0d905e0e5365073b83feff06ba3427db07` (initial commit, `main`, `github.com/sbow/RoboticsIpcModule`) |
 | Target platforms | Jetson (embedded), x86+CUDA (dev), HIL/sim (UDP) |
 
 ## Current phase
@@ -79,3 +79,4 @@ _None._
 |------|-------|---------|-------------|
 | | | Plan pack created | initial |
 | | | Added DESIGN-PRINCIPLES, LESSONS-LEARNED, SYSTEM-VISION, Phase F | plan update |
+| 2026-05-25 | — | Repo init + push to `github.com/sbow/RoboticsIpcModule`; baseline `243ede0` recorded | orchestrator |
