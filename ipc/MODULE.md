@@ -13,8 +13,8 @@ for the layering rules every change is reviewed against.
 | Target | Status | Notes |
 |--------|--------|-------|
 | **Linux x86_64** (glibc ≥ 2.31) | Supported (dev / HIL / sim) | UDP / UDS / SHM SPSC all green via `make test-router` |
-| **NVIDIA Jetson** (aarch64, L4T) | Intended deployment | Same headers; SHM is the high-rate on-board transport (Phase C will harden idle wake + bounded send) |
-| **macOS / Windows** | Not supported | Module uses Linux-specific SHM (`shm_open`), `eventfd`-class idle wake (Phase C), and UDS abstract namespace |
+| **NVIDIA Jetson** (aarch64, L4T) | Intended deployment | Same headers; SHM is the high-rate on-board transport. Phase C: idle CPU < 5% one core (measured 1.6% on x86 dev host) + drop-on-full backpressure with metrics |
+| **macOS / Windows** | Not supported | Module uses Linux-specific SHM (`shm_open`), `eventfd`-class idle wake (deferred to Phase F per [ADR 0007](../docs/adr/0007-router-idle-wake.md)), and UDS abstract namespace |
 
 Cross-machine deployments use the **UDP profile** — SHM does not span hosts.
 
@@ -70,7 +70,7 @@ re-exportable paths:
 #include "router/lifecycle.hpp"        // router_stop_flag(), router_idle_expired(...)
 ```
 
-### Phase B headers (explicit opt-in)
+### Phase B + C headers (explicit opt-in)
 
 These are library headers but **not** pulled in by `router_protocol.hpp` —
 include them directly when you need them. Apps that want a tiny include
@@ -81,6 +81,46 @@ graph (e.g. embedded microcontroller bridges) can ignore them.
 | `router/sideband.hpp` | `SidebandRegion` POD, `SidebandHeader` (16 B in-region header, magic `'RSB1'`), version + class constants per [ADR 0005](../docs/adr/0005-payload-policy-and-sideband.md). |
 | `router/topology_loader.hpp` | TOML 1.0 loader (`load_topology_from_toml_string` / `load_topology_from_toml_file`) → owning `LoadedTopology` (returns a `RouterTopology` view + `RouteRule[]` + per-peer `SidebandRegion[]`). Requires the vendored toml++ header. |
 | `router/last_value_cache.hpp` | `LastValueCache<N=256>` — subscriber-side latest-frame-per-source cache. Thread-unsafe by design; one cache per consumer thread. |
+| `router/metrics.hpp` | `ShmRouterMetrics` (Phase C3) — atomic counters (`forwarded`, `dropped_full`, `recv_empty`, `recv_truncated`) sampled by ops/test code. Reached via `ShmRouterLink::metrics()`. See [ADR 0006](../docs/adr/0006-shm-backpressure-and-metrics.md). |
+
+### SHM backpressure & metrics (Phase C1 / C3)
+
+`ShmRouterLink::send_to_peer` no longer spins on a full destination ring.
+A `try_send`-style publish returns `ShmSendResult::Full` and the router
+drops that frame copy for that destination only — other destinations on
+the same forward are unaffected. Counters are bumped accordingly.
+
+```cpp
+#include "router/metrics.hpp"
+#include "router/shm_router_link.hpp"
+
+ShmRouterServer server(topo);
+server.bind_router({});
+// ... run forwarding loop ...
+
+const ShmRouterMetrics& m = server.link().metrics();
+const uint64_t fwd  = m.forwarded.load(std::memory_order_relaxed);
+const uint64_t drop = m.dropped_full.load(std::memory_order_relaxed);
+```
+
+Field semantics, ownership, and rejected alternatives are in
+[ADR 0006](../docs/adr/0006-shm-backpressure-and-metrics.md). The
+counter block is heap-allocated once per link and lives for the link's
+lifetime; callers may cache the reference returned by `metrics()`.
+
+Subscribers must be designed for "newest state wins" — a counter going up
+means the *fabric* is healthy, even if a downstream peer is dropping. The
+client→router direction is still blocking; see "Known limitations" below.
+
+### Idle CPU and backoff (Phase C2)
+
+`RouterRunOptions::idle_sleep_us` controls the wake granularity in the
+empty branch of the forwarding loop. Default `1000` (1 ms) drops idle
+CPU to ~1.6% of one core (measured against `jetson_prod.toml`, no
+clients) — vs **100% one core** with the legacy `yield()` loop. Set to
+`0` for latency-pinned benchmarks; tune lower (e.g. `100`) for tight
+control loops. See [ADR 0007](../docs/adr/0007-router-idle-wake.md) for
+the measurement and the deferred `eventfd` path.
 
 ### Logging callback (Phase B3)
 
@@ -187,12 +227,13 @@ Contract summary:
 
 ```bash
 make all                    # build every binary under build/ipc/test/
-make test-ipc               # UDP + UDS echo benchmarks (SHM skipped, see below)
+make test-ipc               # full UDP + UDS + SHM echo benchmark (Phase C: SHM interruptible)
 make test-router            # UDS + UDP + SHM router scenarios
-make test-ipc-shm           # forces the SHM echo benchmark — fails until Phase C
-make test-ipc-unit          # Phase B unit tests (topology loader + last value cache)
+make test-ipc-shm           # alias for test-ipc (kept for older docs)
+make test-ipc-unit          # Phase B + C unit tests (topology, LV cache, shm backpressure)
 make test-topology-loader   # topology loader only
 make test-last-value-cache  # last value cache only
+make test-shm-backpressure  # Phase C drop-on-full + metrics unit test
 make debug                  # rebuild with -g -O0
 make clean
 ```
@@ -218,15 +259,17 @@ deployment matrix.
 
 | Limitation | Today | Resolution |
 |------------|-------|-----------|
-| SHM echo benchmark hangs on `stop` | Client uses blocking `shm_push_slot`; on a full ring the stop flag is never observed | Phase C: `try_send` + bounded wait + drop metric |
-| 22 B `RouterFrame` payload | Demo only | Phase B: sideband ADR for vision / tensor / MAVLink-bulk |
-| Hardcoded `/tmp/cpp_tricks_*` paths in demos | `ipc/test/router_client_config.h` | Phase B: topology YAML; profile per environment (Jetson / x86 / HIL / sim) |
-| No idle wake on SHM | `try_recv` + `yield` busy-loop (low priority of router thread) | Phase C: `eventfd` integration or ADR deferral |
-| No router metrics (drops, queue depth) | Silent | Phase C |
+| Client→router SHM publish blocks | `ShmRouterLink::send_to_router` still calls blocking `shm_push_slot`; if the router crashes or stops with a full client req ring, the client hangs until killed | Future ADR — symmetric `try_send_to_router` returning `ShmSendResult` (requires API change to client publish path) |
+| 22 B `RouterFrame` payload | Demo only | Phase B: sideband ADR for vision / tensor / MAVLink-bulk (ADR 0005) |
+| Hardcoded `/tmp/cpp_tricks_*` paths in demos | `ipc/test/router_client_config.h` | Phase B done — TOML profiles in `config/profiles/*.toml`; demos still link the legacy header for the route table |
+| No `eventfd`-based wake on SHM | `try_recv` + 1 ms `sleep_for` (Phase C2) — idle CPU ~1.6% of one core | Phase F: `eventfd` per peer ring (see [ADR 0007](../docs/adr/0007-router-idle-wake.md)) |
+| `dropped_full` does not identify the slow peer | Single global counter on the link | Phase D: per-peer counter array if profiling shows we need it |
+| Datagram link metrics | `DatagramRouterLink<Udp/Uds>` has no metrics; kernel-side drops via `SO_RXQ_OVFL` only | Phase D / E: unified metrics surface across transports |
 | Bridges (Python / Node / MAVLink / vision) | Not present | Phase F: under `examples/bridges/` |
 
-The `make test-ipc` target sets `IPC_SKIP_SHM=1` automatically so the
-baseline gate stays green until Phase C lands the bounded send path.
+Phase A's `IPC_SKIP_SHM=1` workaround is retired: `make test-ipc` now
+runs the full UDP/UDS/SHM benchmark end-to-end. The environment variable
+is still honored if a CI host disallows `/dev/shm`.
 
 ## Related documents
 
@@ -239,6 +282,8 @@ baseline gate stays green until Phase C lands the bounded send path.
 - [docs/adr/0003-transport-agnostic-router.md](../docs/adr/0003-transport-agnostic-router.md) — peer-address adapters + factories
 - [docs/adr/0004-robotics-module-boundaries.md](../docs/adr/0004-robotics-module-boundaries.md) — robotics module boundary, frame versioning, bridge exclusion
 - [docs/adr/0005-payload-policy-and-sideband.md](../docs/adr/0005-payload-policy-and-sideband.md) — control plane vs sideband; SidebandHeader v1
+- [docs/adr/0006-shm-backpressure-and-metrics.md](../docs/adr/0006-shm-backpressure-and-metrics.md) — drop-on-full policy + `ShmRouterMetrics`
+- [docs/adr/0007-router-idle-wake.md](../docs/adr/0007-router-idle-wake.md) — `idle_sleep_us` backoff, `eventfd` deferred to Phase F
 - [ipc/SHM_SPSC_TRANSPORT.md](SHM_SPSC_TRANSPORT.md) — single-producer / single-consumer SHM transport details
 - [config/profiles/*.toml](../config/profiles/) — deployment profiles (x86_dev / jetson_prod / hil / sim_cloud)
 - [third_party/tomlplusplus/LICENSE](../third_party/tomlplusplus/LICENSE) — MIT license for vendored toml++ v3.4.0 single-header parser

@@ -9,12 +9,12 @@ Frozen summary of the IPC/router stack. Update STATUS baseline tag when the libr
 | Path | Role |
 |------|------|
 | `ipc/src/ipc/` | Transports: UDP, UDS, SHM SPSC, echo, shutdown |
-| `ipc/src/router/` | Frame, topology, links, facades, factories, sideband, topology loader, last-value cache, lifecycle |
+| `ipc/src/router/` | Frame, topology, links, facades, factories, sideband, topology loader, last-value cache, lifecycle, **metrics (Phase C)** |
 | `ipc/test/` | Demos + unit tests — **not** the shipped module API |
 | `ipc/MODULE.md` | Public consumption guide (Phase A) |
 | `config/profiles/*.toml` | Deployment profiles (x86_dev / jetson_prod / hil / sim_cloud) — Phase B |
 | `third_party/tomlplusplus/` | Vendored toml++ v3.4.0 single header (MIT) — Phase B |
-| `docs/adr/0001–000N` | IPC/router architecture decisions (0005 = payload + sideband) |
+| `docs/adr/0001–000N` | IPC/router architecture decisions (0005 = payload + sideband, 0006 = SHM backpressure + metrics, 0007 = router idle-wake) |
 | `robotics-ipc-module/` | Plans, principles, lessons (portable) |
 
 > Code was vendored from `sbow/cpp_tricks` (`cpp_tricks/ipc/...`) as the starting point and is now evolved here. Original paths are preserved inside `ipc/src/` so includes like `"router/foo.hpp"` and `"ipc/foo.hpp"` continue to resolve unchanged.
@@ -39,11 +39,15 @@ See [DESIGN-PRINCIPLES.md](DESIGN-PRINCIPLES.md). Summary: no virtual hot path, 
 ## Known limitations
 
 - 22 B payload demo; `router_client_config.h` is the compile-time fallback (Phase B `--config <toml>` is the runtime path)
-- SHM spin on full ring until Phase C (`test-ipc` defaults `IPC_SKIP_SHM=1`)
+- Phase C closed: SHM router drops on full + metrics (ADR 0006), idle CPU 1.6% / core via `idle_sleep_us=1 ms` (ADR 0007); `IPC_SKIP_SHM=1` default retired
+- Client→router SHM publish still blocks on full ring (separate ADR, future)
+- `dropped_full` is a single global counter; per-peer attribution is a Phase D candidate
+- Datagram links (UDP/UDS) have no metrics yet — Phase D / E
+- `eventfd`-based idle wake deferred to Phase F (sleep_for backoff meets the 5%-CPU bar today)
 - No Python/Node/MAVLink until Phase F examples
 
 ## Verify baseline
 
 ```bash
-make all && make test-ipc && make test-router
+make all && make test-ipc-unit && make test-ipc && make test-router
 ```

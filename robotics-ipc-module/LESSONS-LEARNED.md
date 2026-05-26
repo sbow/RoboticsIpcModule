@@ -24,7 +24,8 @@ Concrete failures and fixes from this codebase. **Agents:** grep for these anti-
 | `if constexpr` needs `else` | `router_client` instantiated datagram path for `ShmSpsc` | Always `else` branch so wrong template is not compiled |
 | SHM idle-exit vs datagram | `RouterServer::run` only idle-exited on **exceptions**; SHM `forward()` returns `{}` | Idle check on empty `forward()` + `yield` (see `node.hpp`) |
 | SHM recv tight loop | `recv_message_until` spun at 100% CPU | `yield` each iteration; recorder loop too |
-| Full ring = infinite spin | `shm_push_slot` blocks forever | Phase C: `try_send` + drop/metric |
+| Full ring = infinite spin | `shm_push_slot` blocked forever in router send path | **Fixed Phase C1:** `shm_try_push_slot` + `ShmSpsc::try_send`; `ShmRouterLink::send_to_peer` drops + `dropped_full` metric (ADR 0006). Client→router publish is still blocking — separate ADR. |
+| `yield()` is not "sleep" | Baseline router idle CPU was **100% of one core** sustained — `std::this_thread::yield()` only reorders ready threads, doesn't deschedule on an idle box | **Fixed Phase C2:** `RouterRunOptions::idle_sleep_us` (default 1 ms) — idle CPU drops to ~1.6% one core. `eventfd` deferred to Phase F (ADR 0007). Measure CPU *before* claiming an idle path works. |
 
 ---
 
@@ -47,7 +48,8 @@ Concrete failures and fixes from this codebase. **Agents:** grep for these anti-
 | Blocking `recv` blocks SIGTERM | Long-running servers need poll | 200 ms `SO_RCVTIMEO` or `try_recv` + stop flag |
 | `SIGKILL` skips destructors | Stale UDS/SHM until cleanup | Test `cleanup_*`; document in MODULE.md |
 | Stop order matters less for SHM | Router creator unlinks on exit; stop router after clients in tests | Keep test `stop_all(recorder, controller, router)` |
-| Silent `send_to_peer` miss | SHM dropped forwards to unknown dest | Throw or increment `dropped` metric |
+| Silent `send_to_peer` miss | SHM dropped forwards to unknown dest | Throw on unknown dest (still); on **known dest with full ring**, drop + `dropped_full++` (Phase C, ADR 0006) — never silent |
+| `std::atomic` member breaks `= default` move | Adding a `std::atomic<uint64_t>` to a class deletes its move ctor (atomics are non-movable). Pattern affected `ShmRouterMetrics` integration into `ShmRouterLink`. | Use `std::unique_ptr<MetricsBlock>` member. Metrics block stays heap-allocated; link is movable; `metrics()` returns `const&` that remains valid for link lifetime (ADR 0006). |
 
 ---
 

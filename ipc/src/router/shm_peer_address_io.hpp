@@ -24,6 +24,15 @@ inline void send_shm_buffer(IpcEndpoint<ShmSpsc>& endpoint, const Buffer& payloa
     endpoint.send(params, payload);
 }
 
+// Phase C1: non-blocking publish helper for the router hot path.
+// Returns ShmSendResult::Full when the destination ring has no free slot; the
+// caller is expected to drop, retry, or report per ADR 0006.
+inline ShmSendResult try_send_shm_buffer(
+    IpcEndpoint<ShmSpsc>& endpoint, const Buffer& payload) {
+    ShmSpsc::SendParams params{.payload = payload};
+    return endpoint.try_send(params, payload);
+}
+
 // Validates topology; peer rings are opened in ShmRouterLink::bind_router.
 // router_listen is not a separate SHM object in the per-peer-ring model.
 inline ShmSpsc::BindParams router_listen_bind_params_shm(const RouterTopology& topo) {

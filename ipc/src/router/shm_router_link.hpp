@@ -4,11 +4,13 @@
 #include "ipc/endpoint.hpp"
 #include "ipc/shm_spsc.hpp"
 #include "router/frame.hpp"
+#include "router/metrics.hpp"
 #include "router/peer_table.hpp"
 #include "router/routing.hpp"
 #include "router/shm_peer_address_io.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -80,6 +82,7 @@ public:
                 continue;
             }
             if (buf.size < kRouterFrameSize) {
+                metrics_->recv_truncated.fetch_add(1, std::memory_order_relaxed);
                 continue;
             }
 
@@ -95,8 +98,13 @@ public:
             }
             return result;
         }
+        metrics_->recv_empty.fetch_add(1, std::memory_order_relaxed);
         return {};
     }
+
+    // Phase C3: live counters. Returned reference is stable for the lifetime
+    // of this link (heap-allocated; moves transfer ownership).
+    const ShmRouterMetrics& metrics() const noexcept { return *metrics_; }
 
     void send_to_router(const RouterFrame& frame) {
         if (is_server_) {
@@ -149,10 +157,18 @@ private:
         bind_shm_endpoint(endpoint_, entry->local, false);
     }
 
+    // Phase C1: drop-on-full (ADR 0006). The router never spins on a slow
+    // consumer; a missed frame is preferable to head-of-line blocking the
+    // entire fabric.
     void send_to_peer(uint8_t dest, const Buffer& payload) {
         for (auto& channel : peer_channels_) {
             if (channel.peer_id == dest) {
-                send_shm_buffer(channel.endpoint, payload);
+                if (try_send_shm_buffer(channel.endpoint, payload)
+                    == ShmSendResult::Ok) {
+                    metrics_->forwarded.fetch_add(1, std::memory_order_relaxed);
+                } else {
+                    metrics_->dropped_full.fetch_add(1, std::memory_order_relaxed);
+                }
                 return;
             }
         }
@@ -165,6 +181,7 @@ private:
     uint8_t peer_id_;
     IpcEndpoint<ShmSpsc> endpoint_;
     std::vector<PeerChannel> peer_channels_;
+    std::unique_ptr<ShmRouterMetrics> metrics_ = std::make_unique<ShmRouterMetrics>();
 };
 
 inline ShmRouterLink make_shm_router_link_server(const RouterTopology& topo) {

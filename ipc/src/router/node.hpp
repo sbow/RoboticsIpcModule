@@ -14,6 +14,13 @@
 struct RouterRunOptions {
     int poll_timeout_ms = 200;
     int idle_exit_ms = 0;
+    // Phase C2 — idle backoff sleep when forward() has no work to do.
+    // 0 keeps the legacy yield-only behavior (burns ~100% of one core when
+    // idle, useful for latency-pinned benchmarks on dedicated cores).
+    // 1000 (1 ms) drops idle CPU to ~0 with at most ~1 ms wake latency, which
+    // matches the Phase C acceptance target on Jetson (battery-powered).
+    // See docs/adr/0007-router-idle-wake.md.
+    int idle_sleep_us = 1000;
 };
 
 template<typename Link>
@@ -59,6 +66,9 @@ public:
                         last_activity,
                         std::chrono::milliseconds(opts.idle_exit_ms))) {
                     return;
+                } else if (opts.idle_sleep_us > 0) {
+                    std::this_thread::sleep_for(
+                        std::chrono::microseconds(opts.idle_sleep_us));
                 } else {
                     std::this_thread::yield();
                 }

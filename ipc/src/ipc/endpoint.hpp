@@ -27,6 +27,15 @@ public:
         T::send(handle_, params, payload);
     }
 
+    // Non-blocking publish: forwards to T::try_send when the transport exposes
+    // one (e.g. SPSC ring with backpressure). Only instantiated for transports
+    // that declare try_send (see ShmSpsc); use send() for blocking transports.
+    auto try_send(const typename T::SendParams& params, const Buffer& payload)
+        requires requires(typename T::Handle& h) { T::try_send(h, params, payload); }
+    {
+        return T::try_send(handle_, params, payload);
+    }
+
     void set_recv_timeout_ms(int ms) {
         if constexpr (requires { T::set_recv_timeout(handle_, ms); }) {
             T::set_recv_timeout(handle_, ms);

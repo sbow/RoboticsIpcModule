@@ -16,6 +16,13 @@
 
 struct ShmRegion;
 
+// Phase C1: non-blocking send result for SPSC ring producers.
+// `kFull` is the back-pressure signal the router uses to drop instead of spin.
+enum class ShmSendResult : uint8_t {
+    Ok = 0,
+    Full = 1,
+};
+
 struct ShmSpsc {
     using Handle = std::unique_ptr<ShmRegion>;
 
@@ -41,6 +48,11 @@ struct ShmSpsc {
     static void recv(const Handle& handle, Buffer& buf, RecvResult& out);
 
     static void send(const Handle& handle, const SendParams& params, const Buffer& payload);
+
+    // Phase C1: non-blocking publish. Returns Full when the destination ring has
+    // no free slot; producer keeps payload and decides drop/retry policy.
+    static ShmSendResult try_send(
+        const Handle& handle, const SendParams& params, const Buffer& payload);
 
     static void connect_or_send(const Handle& handle, const SendParams& params) {
         send(handle, params, params.payload);
@@ -154,6 +166,33 @@ inline ShmRegion::~ShmRegion() {
     }
 }
 
+// Single-attempt SPSC publish. Returns false when the ring is full; producer
+// owns drop/retry policy. Phase C1: replaces unbounded spinning on the router
+// hot path.
+inline bool shm_try_push_slot(
+    std::atomic<uint64_t>& head,
+    std::atomic<uint64_t>& tail,
+    uint8_t* slots,
+    size_t slot_count,
+    size_t slot_stride,
+    size_t max_payload,
+    const Buffer& payload) {
+    const uint64_t h = head.load(std::memory_order_relaxed);
+    const uint64_t t = tail.load(std::memory_order_acquire);
+    if (h - t >= slot_count) {
+        return false;
+    }
+
+    const size_t index = static_cast<size_t>(h % slot_count);
+    uint8_t* slot = slots + index * slot_stride;
+    auto* len = reinterpret_cast<std::atomic<uint32_t>*>(slot);
+    const size_t n = payload.size < max_payload ? payload.size : max_payload;
+    std::memcpy(slot + sizeof(std::atomic<uint32_t>), payload.data, n);
+    len->store(static_cast<uint32_t>(n), std::memory_order_relaxed);
+    head.store(h + 1, std::memory_order_release);
+    return true;
+}
+
 inline bool shm_push_slot(
     std::atomic<uint64_t>& head,
     std::atomic<uint64_t>& tail,
@@ -162,22 +201,9 @@ inline bool shm_push_slot(
     size_t slot_stride,
     size_t max_payload,
     const Buffer& payload) {
-    while (true) {
-        const uint64_t h = head.load(std::memory_order_relaxed);
-        const uint64_t t = tail.load(std::memory_order_acquire);
-        if (h - t >= slot_count) {
-            continue;
-        }
-
-        const size_t index = static_cast<size_t>(h % slot_count);
-        uint8_t* slot = slots + index * slot_stride;
-        auto* len = reinterpret_cast<std::atomic<uint32_t>*>(slot);
-        const size_t n = payload.size < max_payload ? payload.size : max_payload;
-        std::memcpy(slot + sizeof(std::atomic<uint32_t>), payload.data, n);
-        len->store(static_cast<uint32_t>(n), std::memory_order_relaxed);
-        head.store(h + 1, std::memory_order_release);
-        return true;
+    while (!shm_try_push_slot(head, tail, slots, slot_count, slot_stride, max_payload, payload)) {
     }
+    return true;
 }
 
 inline bool shm_try_pop_slot(
@@ -234,6 +260,21 @@ inline void ShmSpsc::send(const Handle& handle, const SendParams& params, const 
             region.slot_count, region.slot_stride, region.max_payload, payload);
     }
     (void)params;
+}
+
+inline ShmSendResult ShmSpsc::try_send(
+    const Handle& handle, const SendParams& params, const Buffer& payload) {
+    (void)params;
+    if (!handle) {
+        throw std::runtime_error("shm handle not bound");
+    }
+    ShmRegion& region = *handle;
+    const bool ok = region.is_server_role
+        ? shm_try_push_slot(*region.rep_head, *region.rep_tail, region.rep_slots,
+            region.slot_count, region.slot_stride, region.max_payload, payload)
+        : shm_try_push_slot(*region.req_head, *region.req_tail, region.req_slots,
+            region.slot_count, region.slot_stride, region.max_payload, payload);
+    return ok ? ShmSendResult::Ok : ShmSendResult::Full;
 }
 
 inline bool ShmSpsc::try_recv(const Handle& handle, Buffer& buf, RecvResult& out) {

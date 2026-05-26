@@ -53,6 +53,9 @@ IPC_ROUTER_TEST           := $(IPC_TEST_DIR)/router_test
 IPC_TOPOLOGY_LOADER_TEST  := $(IPC_TEST_DIR)/topology_loader_test
 IPC_LAST_VALUE_CACHE_TEST := $(IPC_TEST_DIR)/last_value_cache_test
 
+# Phase C unit tests.
+IPC_SHM_BACKPRESSURE_TEST := $(IPC_TEST_DIR)/shm_backpressure_test
+
 ALL_TARGETS := \
 	$(IPC_ECHO_TEST) \
 	$(IPC_ECHO_SERVER) \
@@ -62,10 +65,12 @@ ALL_TARGETS := \
 	$(IPC_ROUTER_CLIENT) \
 	$(IPC_ROUTER_TEST) \
 	$(IPC_TOPOLOGY_LOADER_TEST) \
-	$(IPC_LAST_VALUE_CACHE_TEST)
+	$(IPC_LAST_VALUE_CACHE_TEST) \
+	$(IPC_SHM_BACKPRESSURE_TEST)
 
 .PHONY: all clean debug help test-ipc test-ipc-shm test-router \
 	test-ipc-unit test-topology-loader test-last-value-cache \
+	test-shm-backpressure \
 	ipc-echo-server ipc-echo-client ipc-echo-client-benchmark \
 	ipc-router-server ipc-router-client
 
@@ -107,20 +112,26 @@ $(IPC_LAST_VALUE_CACHE_TEST): $(IPC_ROOT)/test/last_value_cache_test.cpp \
 		$(IPC_ROUTER_HEADERS) | $(IPC_TEST_DIR)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(IPC_TEST_FLAGS) $(IPC_TEST_LDFLAGS) -o $@ $<
 
+# Phase C unit test: SHM router backpressure + metrics (ADR 0006).
+$(IPC_SHM_BACKPRESSURE_TEST): $(IPC_ROOT)/test/shm_backpressure_test.cpp \
+		$(IPC_IPC_HEADERS) $(IPC_ROUTER_HEADERS) | $(IPC_TEST_DIR)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(IPC_TEST_FLAGS) $(IPC_TEST_LDFLAGS) -o $@ $<
+
 ipc-echo-server:            $(IPC_ECHO_SERVER)
 ipc-echo-client:            $(IPC_ECHO_CLIENT)
 ipc-echo-client-benchmark:  $(IPC_ECHO_CLIENT_BENCHMARK)
 ipc-router-server:          $(IPC_ROUTER_SERVER)
 ipc-router-client:          $(IPC_ROUTER_CLIENT)
 
-# test-ipc runs UDP + UDS in-process echo benchmarks. The SHM portion is
-# skipped via IPC_SKIP_SHM=1 because the demo client uses blocking
-# shm_push_slot, which spins on a full ring (Phase C will replace it with
-# try_send + bounded wait). Use `make test-ipc-shm` to force the full run
-# during Phase C work.
+# test-ipc runs the in-process UDP + UDS + SHM echo benchmark. Phase C made
+# the SHM client interruptible (try_send + try_recv + stop check), so the
+# IPC_SKIP_SHM escape hatch is no longer needed by default. Set IPC_SKIP_SHM=1
+# explicitly only if your CI host disallows /dev/shm.
 test-ipc: $(IPC_ECHO_TEST)
-	IPC_SKIP_SHM=1 ./$(IPC_ECHO_TEST)
+	./$(IPC_ECHO_TEST)
 
+# Backwards-compatible alias for prior tooling that called `make test-ipc-shm`
+# during Phase A/B to opt back in to SHM. Identical to test-ipc now.
 test-ipc-shm: $(IPC_ECHO_TEST)
 	./$(IPC_ECHO_TEST)
 
@@ -134,7 +145,10 @@ test-topology-loader: $(IPC_TOPOLOGY_LOADER_TEST)
 test-last-value-cache: $(IPC_LAST_VALUE_CACHE_TEST)
 	./$(IPC_LAST_VALUE_CACHE_TEST)
 
-test-ipc-unit: test-topology-loader test-last-value-cache
+test-shm-backpressure: $(IPC_SHM_BACKPRESSURE_TEST)
+	./$(IPC_SHM_BACKPRESSURE_TEST)
+
+test-ipc-unit: test-topology-loader test-last-value-cache test-shm-backpressure
 
 debug: CXXFLAGS += -g -O0
 debug: clean all
@@ -146,12 +160,13 @@ help:
 	@echo "Robotics IPC module"
 	@echo ""
 	@echo "  make [all]               build every demo/test binary under $(BUILD_ROOT)/"
-	@echo "  make test-ipc            build + run UDP/UDS echo benchmark (SHM skipped, Phase C)"
-	@echo "  make test-ipc-shm        force full UDP/UDS/SHM echo benchmark (Phase C diagnostic)"
+	@echo "  make test-ipc            build + run full UDP/UDS/SHM echo benchmark (Phase C: SHM is interruptible)"
+	@echo "  make test-ipc-shm        alias for test-ipc (kept for older docs)"
 	@echo "  make test-router         build + run router scenario test (uds/udp/shm)"
-	@echo "  make test-ipc-unit       Phase B unit tests (topology loader + last value cache)"
+	@echo "  make test-ipc-unit       Phase B + C unit tests (topology loader, LV cache, shm backpressure)"
 	@echo "  make test-topology-loader build + run TOML topology loader unit test only"
 	@echo "  make test-last-value-cache build + run last-value-cache unit test only"
+	@echo "  make test-shm-backpressure build + run Phase C SHM backpressure unit test only"
 	@echo "  make ipc-router-server   build router server demo only"
 	@echo "  make ipc-router-client   build router client demo only"
 	@echo "  make debug               rebuild all with -g -O0"

@@ -94,11 +94,41 @@ uint64_t run_echo_benchmark(const typename Transport::BindParams& bind_params,
                     }
                 }
 
-                Buffer response = client.exchange(
-                    send_params, Buffer::writable(reply, sizeof(reply)));
+                if constexpr (std::is_same_v<Transport, ShmSpsc>) {
+                    // Phase C: interruptible SHM exchange. try_send + try_recv
+                    // with periodic stop checks so a full ring / dead server
+                    // cannot wedge this thread on shutdown. Matches the
+                    // server's existing try_recv loop above; the two together
+                    // let `IPC_SKIP_SHM=1` be retired (see ADR 0006).
+                    Buffer rbuf = Buffer::writable(reply, sizeof(reply));
+                    typename Transport::RecvResult rr{};
 
-                if (response.size > 0) {
-                    round_trips.fetch_add(1, std::memory_order_relaxed);
+                    while (!stop.load(std::memory_order_acquire)
+                           && ShmSpsc::try_send(client.handle(), send_params,
+                                                send_params.payload)
+                              != ShmSendResult::Ok) {
+                        std::this_thread::yield();
+                    }
+                    if (stop.load(std::memory_order_acquire)) {
+                        break;
+                    }
+                    while (!stop.load(std::memory_order_acquire)
+                           && !ShmSpsc::try_recv(client.handle(), rbuf, rr)) {
+                        std::this_thread::yield();
+                    }
+                    if (stop.load(std::memory_order_acquire)) {
+                        break;
+                    }
+                    if (rbuf.size > 0) {
+                        round_trips.fetch_add(1, std::memory_order_relaxed);
+                    }
+                } else {
+                    Buffer response = client.exchange(
+                        send_params, Buffer::writable(reply, sizeof(reply)));
+
+                    if (response.size > 0) {
+                        round_trips.fetch_add(1, std::memory_order_relaxed);
+                    }
                 }
             } catch (const std::runtime_error&) {
                 if (stop.load(std::memory_order_acquire)) {
@@ -165,15 +195,14 @@ int main() {
     const uint64_t uds_trips = run_uds_benchmark();
     std::cout << "UDS round trips in 5s: " << uds_trips << '\n' << std::flush;
 
-    // SHM benchmark uses blocking shm_push_slot in the client send loop.
-    // When the timer thread sets stop=true after kTestDuration, the client may
-    // still be blocked inside exchange() if the ring is full, preventing the
-    // thread join (see LESSONS-LEARNED.md "Full ring = infinite spin"). The
-    // fix is Phase C (try_send + bounded wait). Until then, set IPC_SKIP_SHM=1
-    // to make the in-process echo benchmark reliable for CI / baseline checks.
+    // Phase C lifts the IPC_SKIP_SHM escape hatch: the SHM echo client now
+    // uses try_send + try_recv with periodic stop checks, so shutdown is
+    // bounded even when the ring is full or the server has stopped. The
+    // environment variable is still honored (in case CI wants to skip SHM
+    // for kernel / sysctl reasons), but it is no longer required.
     if (std::getenv("IPC_SKIP_SHM") != nullptr) {
         std::cout << "SHM round trips in 5s: SKIPPED (IPC_SKIP_SHM set; "
-                     "blocking on full ring is fixed in Phase C)\n"
+                     "Phase C made this optional)\n"
                   << std::flush;
         return 0;
     }
