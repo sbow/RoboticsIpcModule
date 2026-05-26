@@ -82,7 +82,7 @@ graph (e.g. embedded microcontroller bridges) can ignore them.
 | `router/topology_loader.hpp` | TOML 1.0 loader (`load_topology_from_toml_string` / `load_topology_from_toml_file`) → owning `LoadedTopology` (returns a `RouterTopology` view + `RouteRule[]` + per-peer `SidebandRegion[]`). Requires the vendored toml++ header. |
 | `router/last_value_cache.hpp` | `LastValueCache<N=256>` — subscriber-side latest-frame-per-source cache. Thread-unsafe by design; one cache per consumer thread. |
 | `router/source_seq_tracker.hpp` | `SourceSeqTracker<N=256>` — subscriber-side per-source `RouterFrame::seq()` tracker (Phase D1). Classifies each observation as First / InOrder / Gap / Duplicate / OutOfOrder; counts gap totals using `uint32_t` modular arithmetic (handles 2³² wrap). Pairs with `LastValueCache` on the read path. Thread-unsafe by design. |
-| `router/metrics.hpp` | `ShmRouterMetrics` (Phase C3) — atomic counters (`forwarded`, `dropped_full`, `recv_empty`, `recv_truncated`) sampled by ops/test code. Reached via `ShmRouterLink::metrics()`. See [ADR 0006](../docs/adr/0006-shm-backpressure-and-metrics.md). |
+| `router/metrics.hpp` | `ShmRouterMetrics` (Phase C3 + D2a) — atomic counters: aggregate `forwarded` / `dropped_full` / `recv_empty` / `recv_truncated`, plus `dropped_full_per_peer[256]` for per-destination drop attribution. Reached via `ShmRouterLink::metrics()`. See [ADR 0006](../docs/adr/0006-shm-backpressure-and-metrics.md). |
 
 ### SHM backpressure & metrics (Phase C1 / C3)
 
@@ -112,6 +112,32 @@ lifetime; callers may cache the reference returned by `metrics()`.
 Subscribers must be designed for "newest state wins" — a counter going up
 means the *fabric* is healthy, even if a downstream peer is dropping. The
 client→router direction is still blocking; see "Known limitations" below.
+
+#### Per-peer drop attribution (Phase D2a)
+
+`ShmRouterMetrics::dropped_full_per_peer` is a 256-element atomic array
+indexed by destination peer id. On every Full drop the router increments
+both the aggregate `dropped_full` (kept for backwards compatibility with
+Phase C consumers) and `dropped_full_per_peer[dest_id]`. Lets operators
+and dashboards answer "which subscriber is the slow one?" without
+re-deriving from logs.
+
+```cpp
+const ShmRouterMetrics& m = server.link().metrics();
+for (uint8_t id : interesting_peer_ids) {
+    const uint64_t d = m.dropped_full_per_peer[id].load(
+        std::memory_order_relaxed);
+    if (d > prev[id]) {
+        warn("peer %s falling behind: +%llu dropped frames",
+             peer_display_name(topo, id), d - prev[id]);
+    }
+    prev[id] = d;
+}
+```
+
+Index `0` is `kEndpointInvalid` and index `255` is `kEndpointServer`;
+both stay at zero in well-formed topologies. Verified end-to-end by
+`shm_backpressure_test` and the `slow_recorder_test` integration scenario.
 
 ### Idle CPU and backoff (Phase C2)
 
@@ -255,6 +281,11 @@ make test-datagram-seq      # Phase D1 — SourceSeqTracker (gap detection, 2^32
 make test-routing           # Phase D1 — route_targets_for edge cases
 make test-resolver          # Phase D1 — peer_id_from_recv<Uds/Udp>
 make test-cli-args          # Phase D1 — log_path_for_role arity regression
+make test-ipc-integration   # Phase D2 — all integration scenarios
+make test-slow-recorder     # Phase D2 — per-peer drop attribution under slow subscriber
+make test-burst-sensor      # Phase D2 — SourceSeqTracker accounting under burst publish
+make test-profile-switch    # Phase D2 — load jetson_prod + hil profiles back-to-back
+make test-router-restart    # Phase D2 — SIGKILL router; next bind succeeds (SHM cleanup)
 make debug                  # rebuild with -g -O0
 make clean
 ```
@@ -341,12 +372,28 @@ int assertions_failed = 0;
 
 Each test's `main` calls the scenario functions in sequence and prints
 `<test>: N/N assertions passed`; non-zero exit on any failure. This
-pattern carries the **eight** current suites (frame, topology loader,
+pattern carries every current suite — eight unit binaries
+(`make test-ipc-unit`, 652 assertions: frame, topology loader,
 last-value cache, SHM backpressure, datagram seq tracker, routing,
-resolver, CLI args) — 642 assertions aggregate — and is the supported
-style for any new test added in Phase D and beyond. If a future
-fixture-heavy suite makes this painful, an ADR is the bar to introduce
-a runner.
+resolver, CLI args) and four Phase D2 integration binaries
+(`make test-ipc-integration`, 64 assertions: slow recorder, burst
+sensor, profile switch, router restart). It is the supported style for
+any new test added in Phase D and beyond. If a future fixture-heavy
+suite makes this painful, an ADR is the bar to introduce a runner.
+
+The D2 integration suite uses two patterns:
+
+  * **In-process, thread-per-role.** `slow_recorder_test`,
+    `burst_sensor_test`, and `profile_switch_test` build the router
+    and its peer endpoints in the same process and spin one
+    `std::thread` per role (router forwarder, sensor, drain). Each
+    thread owns exactly one endpoint to honour the SPSC contract. No
+    fork, no SIGTERM dance, deterministic teardown via atomic stop
+    flags + `join()`.
+  * **Subprocess, fork + signal.** `router_restart_test` execs
+    `router_server` with `--config` to verify recovery from SIGKILL.
+    Uses the same `spawn_child` / `waitpid` idiom as `router_test.cpp`
+    so the surface is familiar.
 
 ## Related documents
 

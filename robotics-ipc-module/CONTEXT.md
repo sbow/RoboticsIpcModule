@@ -40,9 +40,9 @@ See [DESIGN-PRINCIPLES.md](DESIGN-PRINCIPLES.md). Summary: no virtual hot path, 
 
 - 32 B inline payload (v2); `router_client_config.h` is the compile-time fallback (Phase B `--config <toml>` is the runtime path)
 - Phase C closed: SHM router drops on full + metrics (ADR 0006), idle CPU 1.6% / core via `idle_sleep_us=1 ms` (ADR 0007); `IPC_SKIP_SHM=1` default retired
-- Phase D1 closed: subscriber-side `SourceSeqTracker` (uint32 seq, 2³² wrap-aware) ships as a library header; topology loader rejects self-routing; 8 unit-test binaries / 642 assertions
+- Phase D1 closed: subscriber-side `SourceSeqTracker` (uint32 seq, 2³² wrap-aware) ships as a library header; topology loader rejects self-routing; 8 unit-test binaries / 652 assertions
+- Phase D2 closed: per-peer drop attribution (`ShmRouterMetrics::dropped_full_per_peer[256]`, additive on ADR 0006); 4 integration binaries (slow recorder / burst sensor / profile switch / router restart) / 64 assertions
 - Client→router SHM publish still blocks on full ring (separate ADR, future)
-- `dropped_full` is a single global counter; per-peer attribution is the Phase D2a deliverable
 - Datagram links (UDP/UDS) have no metrics yet — Phase D / E
 - `eventfd`-based idle wake deferred to Phase F (sleep_for backoff meets the 5%-CPU bar today)
 - No Python/Node/MAVLink until Phase F examples

@@ -160,6 +160,12 @@ private:
     // Phase C1: drop-on-full (ADR 0006). The router never spins on a slow
     // consumer; a missed frame is preferable to head-of-line blocking the
     // entire fabric.
+    //
+    // Phase D2a: on Full, bump both the aggregate `dropped_full` counter
+    // (kept for backwards compatibility with Phase C consumers) and the
+    // `dropped_full_per_peer[dest]` slot. The latter is what lets operators
+    // and the slow-recorder integration test answer "which subscriber is
+    // the slow one?" without re-deriving from logs.
     void send_to_peer(uint8_t dest, const Buffer& payload) {
         for (auto& channel : peer_channels_) {
             if (channel.peer_id == dest) {
@@ -168,6 +174,8 @@ private:
                     metrics_->forwarded.fetch_add(1, std::memory_order_relaxed);
                 } else {
                     metrics_->dropped_full.fetch_add(1, std::memory_order_relaxed);
+                    metrics_->dropped_full_per_peer[dest].fetch_add(
+                        1, std::memory_order_relaxed);
                 }
                 return;
             }

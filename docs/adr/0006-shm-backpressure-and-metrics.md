@@ -171,9 +171,14 @@ a new ADR.
   ML/MAVLink consumer must be designed for "newest state wins", not
   "every frame is delivered". This is consistent with SYSTEM-VISION.md
   but worth restating in MODULE.md.
-- `dropped_full` alone does not tell you **which** peer was slow. Phase D
+- ~~`dropped_full` alone does not tell you **which** peer was slow. Phase D
   may extend metrics with a small per-peer fixed array; for now ops must
-  correlate drops with peer log offsets.
+  correlate drops with peer log offsets.~~ **Closed in Phase D2a** — added
+  `dropped_full_per_peer[256]` (one `std::atomic<uint64_t>` per peer id).
+  The aggregate `dropped_full` is preserved for backwards compatibility; on
+  every drop we now increment both. Verified by
+  `shm_backpressure_test::test_per_peer_attribution_isolates_slow_destination`
+  and the `slow_recorder_test` integration scenario.
 - The client→router direction is *still* blocking — `send_to_router`
   calls the legacy `shm_push_slot`. If the router crashes while a peer
   has its req ring full, that peer hangs until killed. This is documented

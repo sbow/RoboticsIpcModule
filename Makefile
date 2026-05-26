@@ -65,6 +65,12 @@ IPC_ROUTING_TEST          := $(IPC_TEST_DIR)/routing_test
 IPC_RESOLVER_TEST         := $(IPC_TEST_DIR)/resolver_test
 IPC_CLI_ARGS_TEST         := $(IPC_TEST_DIR)/cli_args_test
 
+# Phase D2 integration tests.
+IPC_SLOW_RECORDER_TEST    := $(IPC_TEST_DIR)/slow_recorder_test
+IPC_BURST_SENSOR_TEST     := $(IPC_TEST_DIR)/burst_sensor_test
+IPC_PROFILE_SWITCH_TEST   := $(IPC_TEST_DIR)/profile_switch_test
+IPC_ROUTER_RESTART_TEST   := $(IPC_TEST_DIR)/router_restart_test
+
 ALL_TARGETS := \
 	$(IPC_ECHO_TEST) \
 	$(IPC_ECHO_SERVER) \
@@ -80,12 +86,18 @@ ALL_TARGETS := \
 	$(IPC_DATAGRAM_SEQ_TEST) \
 	$(IPC_ROUTING_TEST) \
 	$(IPC_RESOLVER_TEST) \
-	$(IPC_CLI_ARGS_TEST)
+	$(IPC_CLI_ARGS_TEST) \
+	$(IPC_SLOW_RECORDER_TEST) \
+	$(IPC_BURST_SENSOR_TEST) \
+	$(IPC_PROFILE_SWITCH_TEST) \
+	$(IPC_ROUTER_RESTART_TEST)
 
 .PHONY: all clean debug help test-ipc test-ipc-shm test-router \
 	test-ipc-unit test-topology-loader test-last-value-cache \
 	test-shm-backpressure test-frame \
 	test-datagram-seq test-routing test-resolver test-cli-args \
+	test-ipc-integration test-slow-recorder test-burst-sensor \
+	test-profile-switch test-router-restart \
 	ipc-echo-server ipc-echo-client ipc-echo-client-benchmark \
 	ipc-router-server ipc-router-client
 
@@ -154,6 +166,29 @@ $(IPC_CLI_ARGS_TEST): $(IPC_ROOT)/test/cli_args_test.cpp \
 		$(IPC_ROOT)/test/router_cli_args.hpp | $(IPC_TEST_DIR)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(IPC_TEST_FLAGS) $(IPC_TEST_LDFLAGS) -o $@ $<
 
+# Phase D2 integration tests.
+#
+# slow_recorder_test / burst_sensor_test use ShmRouterLink + std::thread
+# directly (no fork). profile_switch_test loads real TOML profiles, so it
+# pulls in toml.hpp. router_restart_test execs $(IPC_ROUTER_SERVER), so it
+# depends on that binary being built first.
+$(IPC_SLOW_RECORDER_TEST): $(IPC_ROOT)/test/slow_recorder_test.cpp \
+		$(IPC_IPC_HEADERS) $(IPC_ROUTER_HEADERS) | $(IPC_TEST_DIR)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(IPC_TEST_FLAGS) $(IPC_TEST_LDFLAGS) -o $@ $<
+
+$(IPC_BURST_SENSOR_TEST): $(IPC_ROOT)/test/burst_sensor_test.cpp \
+		$(IPC_IPC_HEADERS) $(IPC_ROUTER_HEADERS) | $(IPC_TEST_DIR)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(IPC_TEST_FLAGS) $(IPC_TEST_LDFLAGS) -o $@ $<
+
+$(IPC_PROFILE_SWITCH_TEST): $(IPC_ROOT)/test/profile_switch_test.cpp \
+		$(IPC_IPC_HEADERS) $(IPC_ROUTER_HEADERS) \
+		$(THIRD_PARTY)/tomlplusplus/toml.hpp | $(IPC_TEST_DIR)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(IPC_TEST_FLAGS) $(IPC_TEST_LDFLAGS) -o $@ $<
+
+$(IPC_ROUTER_RESTART_TEST): $(IPC_ROOT)/test/router_restart_test.cpp \
+		| $(IPC_TEST_DIR)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) -pthread $(IPC_TEST_LDFLAGS) -o $@ $<
+
 ipc-echo-server:            $(IPC_ECHO_SERVER)
 ipc-echo-client:            $(IPC_ECHO_CLIENT)
 ipc-echo-client-benchmark:  $(IPC_ECHO_CLIENT_BENCHMARK)
@@ -204,6 +239,24 @@ test-ipc-unit: test-frame test-topology-loader test-last-value-cache \
 	test-shm-backpressure test-datagram-seq test-routing test-resolver \
 	test-cli-args
 
+# Phase D2 — integration scenarios (no fork: slow_recorder, burst_sensor,
+# profile_switch; subprocess fork: router_restart). router_restart must
+# build router_server first.
+test-slow-recorder: $(IPC_SLOW_RECORDER_TEST)
+	./$(IPC_SLOW_RECORDER_TEST)
+
+test-burst-sensor: $(IPC_BURST_SENSOR_TEST)
+	./$(IPC_BURST_SENSOR_TEST)
+
+test-profile-switch: $(IPC_PROFILE_SWITCH_TEST)
+	./$(IPC_PROFILE_SWITCH_TEST)
+
+test-router-restart: $(IPC_ROUTER_RESTART_TEST) $(IPC_ROUTER_SERVER)
+	./$(IPC_ROUTER_RESTART_TEST)
+
+test-ipc-integration: test-slow-recorder test-burst-sensor \
+	test-profile-switch test-router-restart
+
 debug: CXXFLAGS += -g -O0
 debug: clean all
 
@@ -226,6 +279,11 @@ help:
 	@echo "  make test-routing        build + run route_targets_for edge-case unit test only"
 	@echo "  make test-resolver       build + run UDS/UDP peer_id_from_recv unit test only"
 	@echo "  make test-cli-args       build + run log_path_for_role arity regression unit test only"
+	@echo "  make test-ipc-integration Phase D2 integration scenarios (slow recorder, burst sensor, profile switch, router restart)"
+	@echo "  make test-slow-recorder  Phase D2 — per-peer drop attribution under slow subscriber"
+	@echo "  make test-burst-sensor   Phase D2 — SourceSeqTracker accounting under burst publish"
+	@echo "  make test-profile-switch Phase D2 — load jetson_prod + hil profiles back-to-back"
+	@echo "  make test-router-restart Phase D2 — SIGKILL router; next bind succeeds (SHM cleanup)"
 	@echo "  make ipc-router-server   build router server demo only"
 	@echo "  make ipc-router-client   build router client demo only"
 	@echo "  make debug               rebuild all with -g -O0"
