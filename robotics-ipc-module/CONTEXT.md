@@ -8,11 +8,14 @@ Frozen summary of the IPC/router stack. Update STATUS baseline tag when the libr
 
 | Path | Role |
 |------|------|
-| `cpp_tricks/ipc/src/ipc/` | Transports: UDP, UDS, SHM SPSC, echo, shutdown |
-| `cpp_tricks/ipc/src/router/` | Frame, topology, links, facades, factories |
-| `cpp_tricks/ipc/test/` | Demos — **not** the shipped module API |
-| `docs/adr/0001–0003` | IPC/router architecture |
+| `ipc/src/ipc/` | Transports: UDP, UDS, SHM SPSC, echo, shutdown |
+| `ipc/src/router/` | Frame, topology, links, facades, factories |
+| `ipc/test/` | Demos — **not** the shipped module API |
+| `ipc/MODULE.md` | Public consumption guide (Phase A) |
+| `docs/adr/0001–000N` | IPC/router architecture decisions |
 | `robotics-ipc-module/` | Plans, principles, lessons (portable) |
+
+> Code was vendored from `sbow/cpp_tricks` (`cpp_tricks/ipc/...`) as the starting point and is now evolved here. Original paths are preserved inside `ipc/src/` so includes like `"router/foo.hpp"` and `"ipc/foo.hpp"` continue to resolve unchanged.
 
 ## Transports & when to use (robotics)
 
@@ -41,5 +44,5 @@ See [DESIGN-PRINCIPLES.md](DESIGN-PRINCIPLES.md). Summary: no virtual hot path, 
 ## Verify baseline
 
 ```bash
-make test-ipc && make test-router
+make all && make test-ipc && make test-router
 ```

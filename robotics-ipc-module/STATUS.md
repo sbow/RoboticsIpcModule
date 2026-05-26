@@ -6,32 +6,32 @@
 
 | Key | Value |
 |-----|-------|
-| `IPC_ROOT` | `cpp_tricks/ipc` |
+| `IPC_ROOT` | `ipc` |
 | `PLANS_ROOT` | `robotics-ipc-module` |
 | Baseline tag / commit | `243ede0d905e0e5365073b83feff06ba3427db07` (initial commit, `main`, `github.com/sbow/RoboticsIpcModule`) |
 | Target platforms | Jetson (embedded), x86+CUDA (dev), HIL/sim (UDP) |
 
 ## Current phase
 
-**Next:** `A` — Module packaging
+**Next:** `B` — Message & config
 
 ## Phase completion
 
 | Phase | Name | Status | Notes |
 |-------|------|--------|-------|
-| A | Module packaging | `[ ]` | |
+| A | Module packaging | `[x]` | Vendored ipc tree from sbow/cpp_tricks; flat layout `ipc/`; MODULE.md + ADR 0004 + lifecycle split + kRouterFrameVersion = 1 |
 | B | Message & config | `[ ]` | Profiles + sideband ADR |
-| C | Transport hardening | `[ ]` | Jetson SHM |
-| D | Validation & stress | `[ ]` | |
+| C | Transport hardening | `[ ]` | Jetson SHM; lift `IPC_SKIP_SHM` default once `shm_push_slot` → `try_send` lands |
+| D | Validation & stress | `[ ]` | Wire the A2 grep check into CI |
 | E | Robotics integration | `[ ]` | Jetson + x86 layout |
 | F | Interoperability bridges | `[ ]` | Python, Node, MAVLink, vision |
 
 ### Phase A deliverables
 
-- [ ] A1 `MODULE.md` (Jetson + x86, bridge exclusion)
-- [ ] A2 Public vs example split
-- [ ] A3 Wire format version / ADR
-- [ ] A4 ADR 0004 (references SYSTEM-VISION)
+- [x] A1 `ipc/MODULE.md` (platforms, include graph, link flags, thread model, shutdown contract, public/example boundary, known limitations)
+- [x] A2 Public vs example split (carved `router/lifecycle.hpp` from `router_app.h`; `node.hpp` no longer leaks `#include "router_app.h"`; grep gate documented)
+- [x] A3 `kRouterFrameVersion = 1` added to `ipc/src/router/frame.hpp` with frozen-v1 layout comment
+- [x] A4 `docs/adr/0004-robotics-module-boundaries.md` (in/out scope, module API promise, bridges deferred to Phase F)
 
 ### Phase B deliverables
 
@@ -80,3 +80,5 @@ _None._
 | | | Plan pack created | initial |
 | | | Added DESIGN-PRINCIPLES, LESSONS-LEARNED, SYSTEM-VISION, Phase F | plan update |
 | 2026-05-25 | — | Repo init + push to `github.com/sbow/RoboticsIpcModule`; baseline `243ede0` recorded | orchestrator |
+| 2026-05-25 | A | Vendored `ipc/` + `docs/adr/0001-0003` from `sbow/cpp_tricks` (plain copy); flat IPC_ROOT=`ipc`; fresh top-level `Makefile` (test-ipc skips SHM until Phase C, test-router runs all 3 transports) | phase-a |
+| 2026-05-25 | A | A1 MODULE.md; A2 lifecycle split (`router/lifecycle.hpp`) removes `node.hpp` → `router_app.h` leak; A3 `kRouterFrameVersion = 1`; A4 ADR 0004 — `make all && make test-ipc && make test-router` all green | phase-a |
