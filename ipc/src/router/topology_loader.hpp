@@ -415,6 +415,16 @@ inline void LoadedTopology::build_from_(const toml::table& root) {
                 throw_load("route dest id " + std::to_string(rule.dest1)
                            + " does not match any peer");
             }
+            // Phase D1 — reject self-routing. The router has no reason to
+            // copy a frame back to the peer that produced it, and doing so
+            // is almost certainly a profile mistake (the publisher would
+            // receive its own publications as inputs).
+            if (rule.dest0 == rule.source
+             || (rule.dest1 != 0 && rule.dest1 == rule.source)) {
+                throw_load("route source id " + std::to_string(rule.source)
+                           + " cannot be a destination of itself "
+                           "(self-routing rejected)");
+            }
             out.routes_.push_back(rule);
         }
     }

@@ -81,6 +81,7 @@ graph (e.g. embedded microcontroller bridges) can ignore them.
 | `router/sideband.hpp` | `SidebandRegion` POD, `SidebandHeader` (16 B in-region header, magic `'RSB1'`), version + class constants per [ADR 0005](../docs/adr/0005-payload-policy-and-sideband.md). |
 | `router/topology_loader.hpp` | TOML 1.0 loader (`load_topology_from_toml_string` / `load_topology_from_toml_file`) → owning `LoadedTopology` (returns a `RouterTopology` view + `RouteRule[]` + per-peer `SidebandRegion[]`). Requires the vendored toml++ header. |
 | `router/last_value_cache.hpp` | `LastValueCache<N=256>` — subscriber-side latest-frame-per-source cache. Thread-unsafe by design; one cache per consumer thread. |
+| `router/source_seq_tracker.hpp` | `SourceSeqTracker<N=256>` — subscriber-side per-source `RouterFrame::seq()` tracker (Phase D1). Classifies each observation as First / InOrder / Gap / Duplicate / OutOfOrder; counts gap totals using `uint32_t` modular arithmetic (handles 2³² wrap). Pairs with `LastValueCache` on the read path. Thread-unsafe by design. |
 | `router/metrics.hpp` | `ShmRouterMetrics` (Phase C3) — atomic counters (`forwarded`, `dropped_full`, `recv_empty`, `recv_truncated`) sampled by ops/test code. Reached via `ShmRouterLink::metrics()`. See [ADR 0006](../docs/adr/0006-shm-backpressure-and-metrics.md). |
 
 ### SHM backpressure & metrics (Phase C1 / C3)
@@ -245,11 +246,15 @@ make all                    # build every binary under build/ipc/test/
 make test-ipc               # full UDP + UDS + SHM echo benchmark (Phase C: SHM interruptible)
 make test-router            # UDS + UDP + SHM router scenarios
 make test-ipc-shm           # alias for test-ipc (kept for older docs)
-make test-ipc-unit          # all unit tests (frame v2, topology, LV cache, shm backpressure)
+make test-ipc-unit          # all unit tests (frame v2, topology, LV cache, shm backpressure, D1 suites)
 make test-frame             # RouterFrame v2 layout / accessor test
 make test-topology-loader   # topology loader only
 make test-last-value-cache  # last value cache only
 make test-shm-backpressure  # Phase C drop-on-full + metrics unit test
+make test-datagram-seq      # Phase D1 — SourceSeqTracker (gap detection, 2^32 wrap)
+make test-routing           # Phase D1 — route_targets_for edge cases
+make test-resolver          # Phase D1 — peer_id_from_recv<Uds/Udp>
+make test-cli-args          # Phase D1 — log_path_for_role arity regression
 make debug                  # rebuild with -g -O0
 make clean
 ```
@@ -336,9 +341,10 @@ int assertions_failed = 0;
 
 Each test's `main` calls the scenario functions in sequence and prints
 `<test>: N/N assertions passed`; non-zero exit on any failure. This
-pattern is good enough for the four current suites (frame, topology
-loader, last-value cache, SHM backpressure) and is the supported style
-for any new test added in Phase D and beyond. If a future
+pattern carries the **eight** current suites (frame, topology loader,
+last-value cache, SHM backpressure, datagram seq tracker, routing,
+resolver, CLI args) — 642 assertions aggregate — and is the supported
+style for any new test added in Phase D and beyond. If a future
 fixture-heavy suite makes this painful, an ADR is the bar to introduce
 a runner.
 

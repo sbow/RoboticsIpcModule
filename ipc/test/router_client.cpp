@@ -1,4 +1,5 @@
 #include "router_app.h"
+#include "router_cli_args.hpp"
 #include "router_client_config.h"
 #include "router/factory.hpp"
 #include "router_protocol.hpp"
@@ -62,26 +63,8 @@ void log_sent(
         + peer_display_name(topo, source_id) + " payload=" + payload);
 }
 
-std::string log_path_for_role(const char* role, int argc, char* argv[]) {
-    if (std::strcmp(role, "controller") == 0) {
-        if (argc >= 6) {
-            return argv[5];
-        }
-        if (argc >= 4) {
-            return argv[3];
-        }
-        return demo_log_path(role);
-    }
-    if (std::strcmp(role, "recorder") == 0) {
-        if (argc >= 5) {
-            return argv[4];
-        }
-        if (argc >= 4) {
-            return argv[3];
-        }
-        return demo_log_path(role);
-    }
-    return {};
+std::string demo_log_path_for_role(const char* role, int argc, char* argv[]) {
+    return ::log_path_for_role(role, argc, argv, &demo_log_path);
 }
 
 template<typename Client>
@@ -171,10 +154,10 @@ int dispatch_role_client(
             run_sensor(client, topo);
             return 0;
         case kEndpointController:
-            run_controller(client, topo, log_path_for_role(role, argc, argv));
+            run_controller(client, topo, demo_log_path_for_role(role, argc, argv));
             return 0;
         case kEndpointRecorder:
-            run_recorder(client, topo, log_path_for_role(role, argc, argv));
+            run_recorder(client, topo, demo_log_path_for_role(role, argc, argv));
             return 0;
         default:
             return 1;

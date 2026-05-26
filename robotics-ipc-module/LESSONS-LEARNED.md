@@ -33,7 +33,7 @@ Concrete failures and fixes from this codebase. **Agents:** grep for these anti-
 
 | Lesson | Detail | Action |
 |--------|--------|--------|
-| Wrong `argv` for log paths | Controller used `argv[4]` (port) instead of `argv[5]` (log) | Document arity table in `router_client` or shared `cli_args.hpp`; unit-test log_path_for_role |
+| Wrong `argv` for log paths | Controller used `argv[4]` (port) instead of `argv[5]` (log) | **Fixed Phase D1:** `log_path_for_role` extracted to `ipc/test/router_cli_args.hpp` with callback-based fallback; `cli_args_test` (13 assertions) locks the arity matrix per the table at the bottom of this file. |
 | Recorder log on socket path | `argc >= 3` took `argv[2]` for UDS recorder | UDS/UDP recorder log at `argv[4]` when `argc >= 5`; SHM at `argv[3]` when `argc >= 4` |
 | Log file not cleared between scenarios | SHM test counted 10 lines (2×) | `unlink` recorder/controller logs at **every** `run_scenario` start |
 | Integration test thresholds only | `router_test` counts CSV lines, no latency | Phase D: add unit tests + optional timing |
@@ -57,6 +57,9 @@ Concrete failures and fixes from this codebase. **Agents:** grep for these anti-
 | Right-size the ring, not just the frame | The SHM slot stride dominated cache effects, not the 64 B frame inside it. Going from `max_payload = 1024` to `max_payload = 64` shrank per-peer ring memory by ~15× and made router-frame rings cache-resident on Jetson. The frame size discussion (ADR 0008) was the visible knob; the ring sizing was the *actual* cache lever. | When measuring "how big is this header?", also measure "how big is its container?". For SHM SPSC: `shm_region_size(slot_count, max_payload) = 64 + 2 × slot_count × (4 + max_payload)`. Make the slot stride match the frame and put the bulk in sideband. ADR 0009. |
 | `PeerEntry` extension without source breakage | Adding `shm_slot_count` / `shm_max_payload` to `PeerEntry` could have broken every aggregate initializer (`{id, "name", peer_shm(...)}`) in compile-time topologies. | C++20 aggregate initialization fills trailing members from in-class default initializers — `uint32_t shm_slot_count = 0;` lets old call sites compile unchanged and gives bind helpers a sentinel for "use platform defaults." Always trailing fields + in-class defaults when extending aggregate structs. ADR 0009. |
 | Loader errors should be frame-aware | A vanilla "value out of range" message wouldn't have helped an operator who set `shm_max_payload = 32` after Phase C. The right error message names the constraint: `"shm_max_payload 32 < kRouterFrameSize (64): cannot hold a RouterFrame"`. | Validation messages should reference the *purpose* of the constraint, not just the numeric bound. Cheap to write at load time; saves a debugging session. |
+| Modular arithmetic over uint32 *is* the wrap detector | A subscriber-side gap detector for `RouterFrame::seq()` looks like it needs a "wrap flag" plus comparison logic. It doesn't: `uint32_t delta = seq - last_seq;` does the right thing for free, because unsigned subtraction wraps mod 2³². A `delta` in the lower half (`< 2³¹`) is forward; in the upper half it's backward (stale). | `SourceSeqTracker` (D1) leans on this directly. When a sequence number is monotonic mod-2^N, prefer **unsigned subtraction + window classification** over "did we just wrap?" booleans. ADR 0008 + D1. |
+| Self-routing has no legitimate use | A topology rule `{source: 1, dest: [1]}` (or `{source: 1, dest: [2, 1]}`) would have the router send a peer's own publications back to itself — almost certainly a profile typo, but the loader happily accepted it until D1. | **Loader rejects self-routing at parse time** with a frame-aware message. Validate constraints that have *no benign interpretation* up front; you'll always be paying the debugging cost later otherwise. |
+| Demo helpers that ship in the test directory still deserve tests | `log_path_for_role` was a 22-line free function in the `router_client.cpp` anonymous namespace — unreachable from a unit test, only exercised by the integration scenarios. The original argv bug shipped through that gap. | Phase D1 moved it to `ipc/test/router_cli_args.hpp` (callback-based fallback so the helper has no demo dependency) and added `cli_args_test`. Any function with a non-trivial branch matrix should live in a header that a unit test can include — even if it's demo-shaped. |
 
 ---
 
@@ -64,7 +67,7 @@ Concrete failures and fixes from this codebase. **Agents:** grep for these anti-
 
 | Lesson | Detail | Action |
 |--------|--------|--------|
-| 22 B payload is demo-only | Real stack needs metadata + sideband | Phase B payload ADR; cameras/ML not in frame body |
+| 32 B inline payload is demo-only | v2 expanded inline from 22 B → 32 B (ADR 0008); still not where cameras/ML live | Phase B payload ADR + v2 frame `sideband_idx` / `sideband_seq` / `sideband_len`; cameras/ML go to sideband regions |
 | Same peer IDs across environments | HIL should not recompile routes | Topology file per profile; stable `kEndpoint*` ids |
 | Python/Node in core = bloat | Bridges must be separate processes | Phase F examples only |
 | Jetson vs x86 differs by transport | Jetson: SHM; sim/cloud: UDP loopback | Profile YAML maps `local:` per peer |

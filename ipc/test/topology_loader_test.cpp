@@ -480,6 +480,35 @@ local = "uds:/tmp/a.sock"
 source = 1
 dest = []
 )", "must be an array of 1 or 2");
+
+    // Self-routing rejection (Phase D1 / routing test).
+    expect_load_error(R"(
+[router]
+listen = "uds:/tmp/r.sock"
+[[peers]]
+id = 1
+name = "a"
+local = "uds:/tmp/a.sock"
+[[routes]]
+source = 1
+dest = [1]
+)", "self-routing rejected");
+
+    expect_load_error(R"(
+[router]
+listen = "uds:/tmp/r.sock"
+[[peers]]
+id = 1
+name = "a"
+local = "uds:/tmp/a.sock"
+[[peers]]
+id = 2
+name = "b"
+local = "uds:/tmp/b.sock"
+[[routes]]
+source = 1
+dest = [2, 1]
+)", "self-routing rejected");
 }
 
 }  // namespace
