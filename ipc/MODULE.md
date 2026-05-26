@@ -1,9 +1,11 @@
 # IPC module — consumption guide
 
 Header-only C++20 **message fabric** for Linux robotics: transports
-(UDP / UDS / SHM SPSC), a 32 B router frame, and routing primitives. This
+(UDP / UDS / SHM SPSC), a 32 B router frame, routing primitives, a TOML
+deployment-profile loader, and a subscriber-side last-value cache. This
 file is the **public contract**. See [ADR 0004](../docs/adr/0004-robotics-module-boundaries.md)
-for the module boundary decision and [DESIGN-PRINCIPLES.md](../robotics-ipc-module/DESIGN-PRINCIPLES.md)
+for the module boundary decision, [ADR 0005](../docs/adr/0005-payload-policy-and-sideband.md)
+for the payload / sideband policy, and [DESIGN-PRINCIPLES.md](../robotics-ipc-module/DESIGN-PRINCIPLES.md)
 for the layering rules every change is reviewed against.
 
 ## Platforms
@@ -25,6 +27,7 @@ Cross-machine deployments use the **UDP profile** — SHM does not span hosts.
   - `-lrt` *required* when including `ipc/shm_spsc.hpp` (or anything that transitively pulls it in — e.g. `router_protocol.hpp`, `ipc.hpp`)
   - `-pthread` for any multi-threaded consumer (every router demo uses it)
 - **Standard library:** `libstdc++` or `libc++` both work; no external runtime dependencies
+- **Vendored dependency:** `third_party/tomlplusplus/toml.hpp` (Phase B). Single-header MIT-licensed TOML 1.0 parser; only required when an app includes `router/topology_loader.hpp`. Add `-Ithird_party/tomlplusplus` to the include path; nothing to link.
 
 ## Public entry points
 
@@ -66,6 +69,36 @@ re-exportable paths:
 #include "router/factory.hpp"          // dispatch_transport_kind
 #include "router/lifecycle.hpp"        // router_stop_flag(), router_idle_expired(...)
 ```
+
+### Phase B headers (explicit opt-in)
+
+These are library headers but **not** pulled in by `router_protocol.hpp` —
+include them directly when you need them. Apps that want a tiny include
+graph (e.g. embedded microcontroller bridges) can ignore them.
+
+| Header | Purpose |
+|--------|---------|
+| `router/sideband.hpp` | `SidebandRegion` POD, `SidebandHeader` (16 B in-region header, magic `'RSB1'`), version + class constants per [ADR 0005](../docs/adr/0005-payload-policy-and-sideband.md). |
+| `router/topology_loader.hpp` | TOML 1.0 loader (`load_topology_from_toml_string` / `load_topology_from_toml_file`) → owning `LoadedTopology` (returns a `RouterTopology` view + `RouteRule[]` + per-peer `SidebandRegion[]`). Requires the vendored toml++ header. |
+| `router/last_value_cache.hpp` | `LastValueCache<N=256>` — subscriber-side latest-frame-per-source cache. Thread-unsafe by design; one cache per consumer thread. |
+
+### Logging callback (Phase B3)
+
+`router_app.h` exposes a pluggable logger. The library never logs from
+the hot path (routing is `std::string`-free); the callback is for app /
+bridge code that wants to emit human-readable lines.
+
+```cpp
+using RouterLogFn = void (*)(int level, const char* msg, std::size_t len);
+enum RouterLogLevel { ROUTER_LOG_INFO, ROUTER_LOG_WARN, ROUTER_LOG_ERR };
+
+void router_set_log_fn(RouterLogFn fn);   // call once at startup
+void router_log(int level, std::string_view line);   // leveled
+void router_log(std::string_view line);              // INFO shorthand
+```
+
+Default behaviour (no callback registered): write `<msg>\n` to
+`STDERR_FILENO` — matches the pre-Phase-B behaviour for tests and demos.
 
 ## Examples vs library
 
@@ -157,9 +190,29 @@ make all                    # build every binary under build/ipc/test/
 make test-ipc               # UDP + UDS echo benchmarks (SHM skipped, see below)
 make test-router            # UDS + UDP + SHM router scenarios
 make test-ipc-shm           # forces the SHM echo benchmark — fails until Phase C
+make test-ipc-unit          # Phase B unit tests (topology loader + last value cache)
+make test-topology-loader   # topology loader only
+make test-last-value-cache  # last value cache only
 make debug                  # rebuild with -g -O0
 make clean
 ```
+
+### Deployment profiles (Phase B)
+
+`config/profiles/*.toml` ships four reference profiles. Run the router
+server against any of them:
+
+```bash
+./build/ipc/test/router_server --config config/profiles/x86_dev.toml      # UDS
+./build/ipc/test/router_server --config config/profiles/jetson_prod.toml  # SHM
+./build/ipc/test/router_server --config config/profiles/hil.toml          # UDP (127.0.0.1)
+./build/ipc/test/router_server --config config/profiles/sim_cloud.toml    # UDP (cloud)
+```
+
+Same peer IDs (1=sensor, 2=controller, 3=recorder) and route rules across
+profiles — only addresses and transport kind change. See
+[SYSTEM-VISION.md](../robotics-ipc-module/SYSTEM-VISION.md) for the
+deployment matrix.
 
 ### Known limitations (deferred)
 
@@ -185,4 +238,7 @@ baseline gate stays green until Phase C lands the bounded send path.
 - [docs/adr/0002-ipc-router-refactor.md](../docs/adr/0002-ipc-router-refactor.md) — layered split (transport / link / node / app)
 - [docs/adr/0003-transport-agnostic-router.md](../docs/adr/0003-transport-agnostic-router.md) — peer-address adapters + factories
 - [docs/adr/0004-robotics-module-boundaries.md](../docs/adr/0004-robotics-module-boundaries.md) — robotics module boundary, frame versioning, bridge exclusion
+- [docs/adr/0005-payload-policy-and-sideband.md](../docs/adr/0005-payload-policy-and-sideband.md) — control plane vs sideband; SidebandHeader v1
 - [ipc/SHM_SPSC_TRANSPORT.md](SHM_SPSC_TRANSPORT.md) — single-producer / single-consumer SHM transport details
+- [config/profiles/*.toml](../config/profiles/) — deployment profiles (x86_dev / jetson_prod / hil / sim_cloud)
+- [third_party/tomlplusplus/LICENSE](../third_party/tomlplusplus/LICENSE) — MIT license for vendored toml++ v3.4.0 single-header parser

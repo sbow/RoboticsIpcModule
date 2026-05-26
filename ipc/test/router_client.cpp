@@ -4,12 +4,14 @@
 #include "router_protocol.hpp"
 
 #include <chrono>
+#include <cstddef>
 #include <cstring>
 #include <fstream>
 #include <iostream>
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <unistd.h>
 
 namespace {
 
@@ -213,10 +215,24 @@ struct RoleDispatcher {
     }
 };
 
+// B3 demo logger — mirrors router_server.cpp; prefixes by level on stderr.
+void demo_stderr_logger(int level, const char* msg, std::size_t len) {
+    const char* tag = (level == ROUTER_LOG_ERR)  ? "[err]  "
+                    : (level == ROUTER_LOG_WARN) ? "[warn] "
+                                                 : "[info] ";
+    std::string out;
+    out.reserve(7 + len + 1);
+    out.append(tag);
+    out.append(msg, len);
+    out.push_back('\n');
+    (void)!::write(STDERR_FILENO, out.data(), out.size());
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
     install_router_stop_handlers();
+    router_set_log_fn(demo_stderr_logger);
 
     if (argc < 3) {
         usage(argv[0]);
@@ -233,7 +249,7 @@ int main(int argc, char* argv[]) {
             return 1;
         }
     } catch (const std::exception& e) {
-        std::cerr << "error: " << e.what() << '\n';
+        router_log(ROUTER_LOG_ERR, std::string("error: ") + e.what());
         return 1;
     }
 

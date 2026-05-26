@@ -1,0 +1,37 @@
+# Cloud / CI simulation profile — Linux VM, container network.
+#
+# Transport: UDP on a private cloud subnet placeholder (replace 10.0.0.1
+# with whatever the CI orchestrator assigns). Same peer IDs as every other
+# profile; cross-host SHM is not supported (ADR 0005), so UDP is the only
+# correct choice for multi-container deployments.
+#
+# Usage:
+#   ./build/ipc/test/router_server --config config/profiles/sim_cloud.toml
+#
+# See: SYSTEM-VISION.md Cloud / CI sim row.
+
+[router]
+listen = "udp:10.0.0.1:19200"
+
+[[peers]]
+id    = 1
+name  = "sensor"
+local = "udp:10.0.0.2:19201"
+
+[[peers]]
+id    = 2
+name  = "controller"
+local = "udp:10.0.0.3:19202"
+
+[[peers]]
+id    = 3
+name  = "recorder"
+local = "udp:10.0.0.4:19203"
+
+[[routes]]
+source = 1
+dest   = [2, 3]
+
+[[routes]]
+source = 2
+dest   = [3]

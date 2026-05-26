@@ -1,0 +1,37 @@
+# x86 development profile — Linux laptop / workstation.
+#
+# Transport: UDS sockets under /tmp (matches the historical demo paths so
+# existing manual smoke tests keep working). Same peer IDs and route rules
+# as every other profile — only address strings differ.
+#
+# Usage:
+#   ./build/ipc/test/router_server --config config/profiles/x86_dev.toml
+#
+# See: docs/adr/0004-robotics-module-boundaries.md (module surface),
+#      ipc/src/router/topology_loader.hpp (schema).
+
+[router]
+listen = "uds:/tmp/cpp_tricks_router.sock"
+
+[[peers]]
+id    = 1
+name  = "sensor"
+local = "uds:/tmp/cpp_tricks_router_a.sock"
+
+[[peers]]
+id    = 2
+name  = "controller"
+local = "uds:/tmp/cpp_tricks_router_b.sock"
+
+[[peers]]
+id    = 3
+name  = "recorder"
+local = "uds:/tmp/cpp_tricks_router_c.sock"
+
+[[routes]]
+source = 1     # sensor → controller (primary), recorder (tap)
+dest   = [2, 3]
+
+[[routes]]
+source = 2     # controller → recorder (single tap)
+dest   = [3]

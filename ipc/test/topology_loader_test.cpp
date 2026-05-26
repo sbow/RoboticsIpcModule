@@ -1,0 +1,355 @@
+// Unit tests for ipc/src/router/topology_loader.hpp.
+//
+// Plain-C++ assertions; no test framework dep so the binary stays drop-in
+// header-only. Run via `make test-ipc-unit` (also builds last_value_cache_test).
+
+#include "router/topology_loader.hpp"
+#include "router/sideband.hpp"
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
+#include <string>
+#include <string_view>
+
+namespace {
+
+int g_failed = 0;
+int g_total  = 0;
+
+#define EXPECT(cond)                                                        \
+    do {                                                                    \
+        ++g_total;                                                          \
+        if (!(cond)) {                                                      \
+            ++g_failed;                                                     \
+            std::cerr << "FAIL " << __FILE__ << ":" << __LINE__             \
+                      << " EXPECT(" #cond ")\n";                            \
+        }                                                                   \
+    } while (0)
+
+#define EXPECT_EQ(a, b)                                                     \
+    do {                                                                    \
+        ++g_total;                                                          \
+        const auto _a = (a);                                                \
+        const auto _b = (b);                                                \
+        if (!(_a == _b)) {                                                  \
+            ++g_failed;                                                     \
+            std::cerr << "FAIL " << __FILE__ << ":" << __LINE__             \
+                      << " EXPECT_EQ(" #a ", " #b ") -> "                   \
+                      << _a << " != " << _b << "\n";                        \
+        }                                                                   \
+    } while (0)
+
+#define EXPECT_STREQ(a, b)                                                  \
+    do {                                                                    \
+        ++g_total;                                                          \
+        const char* _a = (a);                                               \
+        const char* _b = (b);                                               \
+        if (_a == nullptr || _b == nullptr || std::strcmp(_a, _b) != 0) {   \
+            ++g_failed;                                                     \
+            std::cerr << "FAIL " << __FILE__ << ":" << __LINE__             \
+                      << " EXPECT_STREQ(" #a ", " #b ") -> '"               \
+                      << (_a ? _a : "<null>") << "' != '"                   \
+                      << (_b ? _b : "<null>") << "'\n";                     \
+        }                                                                   \
+    } while (0)
+
+void expect_load_error(std::string_view toml, const char* substr) {
+    ++g_total;
+    try {
+        load_topology_from_toml_string(toml);
+        std::cerr << "FAIL expected TopologyLoadError containing '" << substr
+                  << "', loader returned success\n";
+        ++g_failed;
+    } catch (const TopologyLoadError& e) {
+        if (std::string(e.what()).find(substr) == std::string::npos) {
+            std::cerr << "FAIL TopologyLoadError text '" << e.what()
+                      << "' did not contain '" << substr << "'\n";
+            ++g_failed;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "FAIL expected TopologyLoadError, got std::exception: "
+                  << e.what() << "\n";
+        ++g_failed;
+    }
+}
+
+constexpr const char* kValidUds = R"(
+[router]
+listen = "uds:/tmp/cpp_tricks_router.sock"
+
+[[peers]]
+id    = 1
+name  = "sensor"
+local = "uds:/tmp/cpp_tricks_router_a.sock"
+
+[[peers]]
+id    = 2
+name  = "controller"
+local = "uds:/tmp/cpp_tricks_router_b.sock"
+
+[[peers]]
+id    = 3
+name  = "recorder"
+local = "uds:/tmp/cpp_tricks_router_c.sock"
+
+[[routes]]
+source = 1
+dest   = [2, 3]
+
+[[routes]]
+source = 2
+dest   = [3]
+)";
+
+constexpr const char* kValidShmWithSideband = R"(
+[router]
+listen = "shm:/router_a"
+
+[[peers]]
+id    = 1
+name  = "sensor"
+local = "shm:/router_sensor"
+
+[[peers]]
+id    = 2
+name  = "controller"
+local = "shm:/router_controller"
+
+  [[peers.sideband]]
+  class             = "vision_nv12"
+  name              = "/robot_vision_nv12"
+  max_payload_bytes = 8388608
+
+  [[peers.sideband]]
+  class             = "ml_tensor_in"
+  name              = "/robot_ml_tensor_in"
+  max_payload_bytes = 16777216
+
+[[peers]]
+id    = 3
+name  = "recorder"
+local = "shm:/router_recorder"
+
+[[routes]]
+source = 1
+dest   = [2, 3]
+)";
+
+constexpr const char* kValidUdp = R"(
+[router]
+listen = "udp:127.0.0.1:19100"
+
+[[peers]]
+id    = 1
+name  = "sensor"
+local = "udp:127.0.0.1:19101"
+
+[[peers]]
+id    = 2
+name  = "controller"
+local = "udp:127.0.0.1:19102"
+
+[[routes]]
+source = 1
+dest   = [2]
+)";
+
+void test_valid_uds() {
+    LoadedTopology topo = load_topology_from_toml_string(kValidUds);
+    const RouterTopology view = topo.view();
+
+    EXPECT_EQ(view.peer_count, static_cast<std::size_t>(3));
+    EXPECT(view.router_listen.kind == PeerAddressKind::UdsPath);
+    EXPECT_STREQ(view.router_listen.u.uds_path,
+                 "/tmp/cpp_tricks_router.sock");
+
+    const PeerEntry* sensor = peer_by_id(view, 1);
+    EXPECT(sensor != nullptr);
+    if (sensor) {
+        EXPECT_STREQ(sensor->name, "sensor");
+        EXPECT(sensor->local.kind == PeerAddressKind::UdsPath);
+        EXPECT_STREQ(sensor->local.u.uds_path,
+                     "/tmp/cpp_tricks_router_a.sock");
+    }
+
+    EXPECT_EQ(topo.route_count(), static_cast<std::size_t>(2));
+    const RouteRule* rules = topo.routes();
+    EXPECT_EQ(static_cast<int>(rules[0].source), 1);
+    EXPECT_EQ(static_cast<int>(rules[0].dest0),  2);
+    EXPECT_EQ(static_cast<int>(rules[0].dest1),  3);
+    EXPECT_EQ(static_cast<int>(rules[1].source), 2);
+    EXPECT_EQ(static_cast<int>(rules[1].dest0),  3);
+    EXPECT_EQ(static_cast<int>(rules[1].dest1),  0);
+}
+
+void test_valid_shm_with_sideband() {
+    LoadedTopology topo = load_topology_from_toml_string(kValidShmWithSideband);
+    const RouterTopology view = topo.view();
+
+    EXPECT(view.router_listen.kind == PeerAddressKind::ShmRing);
+    EXPECT_STREQ(view.router_listen.u.shm_name, "/router_a");
+
+    std::size_t controller_sb_count = 0;
+    const SidebandRegion* controller_sb =
+        topo.sidebands_for(2, controller_sb_count);
+    EXPECT_EQ(controller_sb_count, static_cast<std::size_t>(2));
+    if (controller_sb_count == 2) {
+        EXPECT_STREQ(controller_sb[0].name, "/robot_vision_nv12");
+        EXPECT_EQ(controller_sb[0].max_payload_bytes,
+                  static_cast<std::size_t>(8388608));
+        EXPECT_EQ(controller_sb[0].version, kSidebandVersion);
+        EXPECT_STREQ(controller_sb[1].name, "/robot_ml_tensor_in");
+        EXPECT_EQ(controller_sb[1].max_payload_bytes,
+                  static_cast<std::size_t>(16777216));
+    }
+
+    // Peers without sideband entries report count 0.
+    std::size_t sensor_sb_count = 99;
+    const SidebandRegion* sensor_sb = topo.sidebands_for(1, sensor_sb_count);
+    EXPECT_EQ(sensor_sb_count, static_cast<std::size_t>(0));
+    EXPECT(sensor_sb == nullptr);
+}
+
+void test_valid_udp() {
+    LoadedTopology topo = load_topology_from_toml_string(kValidUdp);
+    const RouterTopology view = topo.view();
+    EXPECT(view.router_listen.kind == PeerAddressKind::UdpEndpoint);
+    EXPECT_STREQ(view.router_listen.u.udp.host, "127.0.0.1");
+    EXPECT_EQ(static_cast<int>(view.router_listen.u.udp.port), 19100);
+
+    const PeerEntry* sensor = peer_by_id(view, 1);
+    EXPECT(sensor != nullptr);
+    if (sensor) {
+        EXPECT(sensor->local.kind == PeerAddressKind::UdpEndpoint);
+        EXPECT_EQ(static_cast<int>(sensor->local.u.udp.port), 19101);
+    }
+}
+
+void test_load_from_file() {
+    // x86_dev.toml is the most stable demo profile.
+    LoadedTopology topo = load_topology_from_toml_file(
+        "config/profiles/x86_dev.toml");
+    const RouterTopology view = topo.view();
+    EXPECT_EQ(view.peer_count, static_cast<std::size_t>(3));
+    EXPECT(view.router_listen.kind == PeerAddressKind::UdsPath);
+    EXPECT_EQ(topo.route_count(), static_cast<std::size_t>(2));
+}
+
+void test_move_preserves_interned_pointers() {
+    // After moving a LoadedTopology, the const char* pointers it handed out
+    // through view() must still resolve. (Documented Linux libstdc++/libc++
+    // contract; this test guards against regressions on the platforms we
+    // actually support.)
+    LoadedTopology topo = load_topology_from_toml_string(kValidUds);
+    const char* sensor_name_before;
+    {
+        const PeerEntry* sensor = peer_by_id(topo.view(), 1);
+        sensor_name_before = sensor ? sensor->name : nullptr;
+    }
+    LoadedTopology moved = std::move(topo);
+    const PeerEntry* sensor_after = peer_by_id(moved.view(), 1);
+    EXPECT(sensor_after != nullptr);
+    if (sensor_after) {
+        EXPECT_STREQ(sensor_after->name, "sensor");
+        EXPECT(sensor_after->name == sensor_name_before);
+    }
+}
+
+void test_errors() {
+    expect_load_error("", "missing [router] section");
+
+    expect_load_error(R"(
+[router]
+listen = "udp:127.0.0.1:99999"
+[[peers]]
+id = 1
+name = "a"
+local = "udp:127.0.0.1:1"
+)", "udp port out of range");
+
+    expect_load_error(R"(
+[router]
+listen = "uds:/tmp/r.sock"
+)", "missing or empty [[peers]]");
+
+    expect_load_error(R"(
+[router]
+listen = "uds:/tmp/r.sock"
+[[peers]]
+id = 1
+name = "a"
+local = "uds:/tmp/a.sock"
+[[peers]]
+id = 1
+name = "b"
+local = "uds:/tmp/b.sock"
+)", "duplicate peer id");
+
+    expect_load_error(R"(
+[router]
+listen = "uds:/tmp/r.sock"
+[[peers]]
+id = 0
+name = "a"
+local = "uds:/tmp/a.sock"
+)", "out of range 1..254");
+
+    expect_load_error(R"(
+[router]
+listen = "uds:/tmp/r.sock"
+[[peers]]
+id = 1
+name = "a"
+local = "smtp:/tmp/a.sock"
+)", "unknown address scheme");
+
+    expect_load_error(R"(
+[router]
+listen = "uds:/tmp/r.sock"
+[[peers]]
+id = 1
+name = "a"
+local = "shm:no_leading_slash"
+)", "shm address must start with");
+
+    expect_load_error(R"(
+[router]
+listen = "uds:/tmp/r.sock"
+[[peers]]
+id = 1
+name = "a"
+local = "uds:/tmp/a.sock"
+[[routes]]
+source = 1
+dest = [99]
+)", "does not match any peer");
+
+    expect_load_error(R"(
+[router]
+listen = "uds:/tmp/r.sock"
+[[peers]]
+id = 1
+name = "a"
+local = "uds:/tmp/a.sock"
+[[routes]]
+source = 1
+dest = []
+)", "must be an array of 1 or 2");
+}
+
+}  // namespace
+
+int main() {
+    test_valid_uds();
+    test_valid_shm_with_sideband();
+    test_valid_udp();
+    test_load_from_file();
+    test_move_preserves_interned_pointers();
+    test_errors();
+
+    std::cout << "topology_loader_test: " << (g_total - g_failed) << '/'
+              << g_total << " assertions passed\n";
+    return g_failed == 0 ? 0 : 1;
+}

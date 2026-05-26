@@ -1,0 +1,37 @@
+# Hardware-in-the-loop bench profile.
+#
+# Transport: UDP on 127.0.0.1. Real plant + sensors are replaced by mock
+# processes (Phase F examples) that bind the same ports; route rules and
+# peer IDs are identical to jetson_prod and x86_dev so the same router
+# binary serves all three with only --config swapping.
+#
+# Usage:
+#   ./build/ipc/test/router_server --config config/profiles/hil.toml
+#
+# See: SYSTEM-VISION.md HIL row.
+
+[router]
+listen = "udp:127.0.0.1:19100"
+
+[[peers]]
+id    = 1
+name  = "sensor"
+local = "udp:127.0.0.1:19101"
+
+[[peers]]
+id    = 2
+name  = "controller"
+local = "udp:127.0.0.1:19102"
+
+[[peers]]
+id    = 3
+name  = "recorder"
+local = "udp:127.0.0.1:19103"
+
+[[routes]]
+source = 1
+dest   = [2, 3]
+
+[[routes]]
+source = 2
+dest   = [3]
