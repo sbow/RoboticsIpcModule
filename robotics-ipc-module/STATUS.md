@@ -13,7 +13,7 @@
 
 ## Current phase
 
-**Next:** `D` — Validation & stress (or `E1` reference layout in parallel)
+**Active:** `D` — Validation & stress (D0 complete; D1 next)
 
 ## Phase completion
 
@@ -22,7 +22,7 @@
 | A | Module packaging | `[x]` | Vendored ipc tree from sbow/cpp_tricks; flat layout `ipc/`; MODULE.md + ADR 0004 + lifecycle split + kRouterFrameVersion = 1 |
 | B | Message & config | `[x]` | toml++ vendored; topology_loader + 4 profiles; ADR 0005 sideband; RouterLogFn; LastValueCache; unit tests 71/71 |
 | C | Transport hardening | `[x]` | `ShmSpsc::try_send` + drop-on-full + `ShmRouterMetrics`; `idle_sleep_us` cuts idle CPU 100% → 1.63%; ADRs 0006 + 0007; SHM benchmark interruptible; `IPC_SKIP_SHM` default retired |
-| D | Validation & stress | `[ ]` | Wire the A2 grep check + B/C unit tests into CI; D1 partially seeded |
+| D | Validation & stress | `[~]` | D0 (per-peer ring sizing, ADR 0009) done; D1 next |
 | E | Robotics integration | `[ ]` | Jetson + x86 layout |
 | F | Interoperability bridges | `[ ]` | Python, Node, MAVLink, vision; also hosts eventfd idle-wake follow-up (ADR 0007 deferral) |
 
@@ -49,10 +49,12 @@
 
 ### Phase D deliverables
 
-- [ ] D1 Unit tests (+ cli_args regression)
-- [ ] D2 Integration (restart, profile smoke)
-- [ ] D3 Stress/soak
+- [x] D0 Per-peer SHM ring sizing — ADR 0009; `[[peers]] shm_slot_count` / `shm_max_payload` optional fields parsed and validated (≥ `kRouterFrameSize`, ≤ 256 MiB, ≤ 2²⁰ slots, only on `shm:` peers); `PeerEntry` carries sentinel-zero `uint32_t` overrides (aggregate-init compatible); new `bind_shm_endpoint(IpcEndpoint<ShmSpsc>&, const PeerEntry&, bool)` overload wires overrides through `ShmRouterLink`; `jetson_prod.toml` shipped with the recommended `256 × 64` per peer (~15× memory reduction vs. legacy 256 × 1024); `topology_loader_test` extended (+26 assertions). No source change in any compile-time consumer; `make test-router` green on all three transports.
+- [ ] D1 Unit tests (+ cli_args regression, datagram_seq_test, routing_test, resolver_test)
+- [ ] D2 Integration (restart, slow recorder w/ per-peer attribution D2a, burst sensor, profile-switch smoke)
+- [ ] D3 Stress/soak (soak_router.sh, shm_leak_check.sh, idle_cpu_check.sh)
 - [ ] D4 Fault injection
+- [ ] CI workflow (PR gate)
 
 ### Phase E deliverables
 
@@ -85,3 +87,4 @@ _None._
 | 2026-05-25 | B | Vendored toml++ v3.4.0; B1 ADR 0005 + `router/sideband.hpp`; B2 `router/topology_loader.hpp` + 4 profiles + `router_server --config <toml>` (auto-derives transport from listen kind); B3 `RouterLogFn` plug-in + leveled `router_log`; B4 `router/last_value_cache.hpp`; `make test-ipc-unit` adds topology + cache tests (71/71 assertions); `make test-ipc` + `make test-router` regression green | phase-b |
 | 2026-05-25 | C | **Baseline measurement (yield-only):** idle CPU = 100% one core sustained over 60 s (`pidstat -p $PID 10 6`, jetson_prod profile, no clients). C1 `ShmSendResult` + `shm_try_push_slot` + `ShmSpsc::try_send`; `ShmRouterLink::send_to_peer` drops on Full and bumps `dropped_full` (no infinite spin). C3 `router/metrics.hpp` with `ShmRouterMetrics` (atomics, heap-owned via `unique_ptr`, link stays movable); `metrics()` accessor stable for link lifetime. C2 `RouterRunOptions::idle_sleep_us` (default 1 ms) replaces unconditional `yield()`. **Post-fix measurement:** idle CPU = 1.68% one core averaged over 60 s (same host, same profile) — comfortably under the 5% acceptance bar. ADR 0006 (drop-on-full + metrics) and ADR 0007 (idle-wake sleep_for now, eventfd deferred to Phase F). Echo client SHM path made interruptible via try_send + try_recv + stop checks; `IPC_SKIP_SHM=1` default removed from `make test-ipc`. New unit test `ipc/test/shm_backpressure_test.cpp` (3 scenarios, 27/27 assertions) verifies forwarded / recv_empty / drop policy under ring saturation (published=1024 → forwarded=256, dropped_full=768; 2s deadline guard catches regressions). Aggregate: `make test-ipc-unit` 98/98 assertions, `make test-ipc` UDP 828k + UDS 890k + SHM 7.9M trips/5s, `make test-router` all 3 transports green. | phase-c |
 | 2026-05-25 | C→D bridge | **ADR 0008 — RouterFrame v2.** Co-authored decision to retire v1 (32 B, 9 B big-endian timestamp, 22 B payload, no topic / seq / sideband descriptor) in favor of a 64 B cache-line-sized header: `source`, `flags` (has_sideband/keyframe/is_ack/eos/priority), `topic_id`, `seq`, `timestamp_ns` (host LE), `sideband_idx`, `sideband_len` (uint48, 256 TB cap), `sideband_seq`, 32 B inline payload. `kRouterFrameVersion` bumped 1→2. Single-deploy migration (no on-wire negotiation); existing in-tree callers (`router_client.cpp`, `router_server.cpp`, `router_test.cpp`, all unit tests) compiled unchanged thanks to API-compatible accessors. New unit test `ipc/test/frame_test.cpp` covers every field + offset + uint48 truncation + neighbor-non-clobber (163/163 assertions). ADR 0004 updated to point at v2 as active contract (v1 layout preserved for archeology); ADR 0005 refined with the in-frame sideband descriptor and a forward declaration of `[[peers.sideband]] memory_class` for Phase F (CUDA/NvBufSurface). Aggregate post-v2: `make test-ipc-unit` 261/261 assertions, `make test-ipc` UDP 734k + UDS 825k + SHM 8.6M trips/5s, `make test-router` all 3 transports green. | phase-c→d |
+| 2026-05-25 | D0 | **ADR 0009 — Per-peer SHM ring sizing.** `[[peers]]` schema gains optional `shm_slot_count` (default 256) and `shm_max_payload` (default 1024, must be ≥ `kRouterFrameSize` when set), validated at load time. `PeerEntry` grows two `uint32_t` trailing fields with in-class default `= 0` (sentinel for "use `ShmSpsc::BindParams` defaults"); all existing aggregate initializers (`kDemoPeers` in `router_client_config.h`, `kPeers` in `shm_backpressure_test.cpp`) compile unchanged. New `bind_shm_endpoint(IpcEndpoint<ShmSpsc>&, const PeerEntry&, bool)` overload threads the overrides through `ShmRouterLink::bind_router` and `bind_peer`. Loader rejects: `shm_max_payload < 64`, `shm_max_payload > 256 MiB`, `shm_slot_count > 2²⁰`, or any `shm_*` field set on a non-SHM peer — each with frame-aware error text. `jetson_prod.toml` updated to demonstrate the recommended sizing on all three peers (256 × 64 = ~35 KiB per ring direction; ~15× reduction vs. the legacy 256 × 1024 ≈ 514 KiB). `topology_loader_test` extended with 5 new scenarios (defaults preserved, overrides parsed, cache-footprint ratio asserted, validation matrix, jetson_prod profile invariant). Aggregate post-D0: `make test-ipc-unit` 287/287 assertions (163 + 71 + 26 + 27); `make test-router` all 3 transports green; `make test-ipc` UDP 745k + UDS 866k + SHM 8.2M trips/5s (no regression). | phase-d0 |

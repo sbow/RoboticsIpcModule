@@ -8,9 +8,12 @@
 //   listen = "uds:/tmp/router.sock"     # or "udp:127.0.0.1:19100", "shm:/router_a"
 //
 //   [[peers]]
-//   id    = 1
-//   name  = "sensor"
-//   local = "uds:/tmp/sensor.sock"
+//   id              = 1
+//   name            = "sensor"
+//   local           = "uds:/tmp/sensor.sock"
+//   shm_slot_count  = 256                # ADR 0009, optional, shm: peers only
+//   shm_max_payload = 64                 # ADR 0009, optional, shm: peers only
+//                                        # >= kRouterFrameSize (64), <= 256 MiB
 //
 //     [[peers.sideband]]                # optional, per ADR 0005
 //     class             = "vision_nv12"
@@ -64,6 +67,11 @@ namespace topology_loader_detail {
 constexpr size_t kUdsPathMaxLen = 107;
 constexpr size_t kPeerNameMaxLen = 63;
 constexpr size_t kShmNameMaxLen = 250;
+
+// ADR 0009 — per-peer SHM ring sizing limits enforced at load time.
+constexpr int64_t kShmSlotCountMin       = 1;
+constexpr int64_t kShmSlotCountMax       = 1 << 20;          // ~1M slots
+constexpr int64_t kShmMaxPayloadMax      = 256 * 1024 * 1024; // 256 MiB
 
 inline void throw_load(const std::string& what) {
     throw TopologyLoadError(what);
@@ -269,6 +277,45 @@ inline void LoadedTopology::build_from_(const toml::table& root) {
         entry.id    = id;
         entry.name  = out.intern_(*name_opt);
         entry.local = out.parse_address_(*local_opt);
+
+        // ADR 0009 — optional per-peer SHM ring sizing.
+        auto slot_count_opt  = (*peer_tbl)["shm_slot_count"].value<int64_t>();
+        auto max_payload_opt = (*peer_tbl)["shm_max_payload"].value<int64_t>();
+        const bool has_shm_override = slot_count_opt.has_value()
+                                   || max_payload_opt.has_value();
+        if (has_shm_override
+            && entry.local.kind != PeerAddressKind::ShmRing) {
+            throw_load("peer '" + *name_opt + "' has shm_slot_count or "
+                       "shm_max_payload but local address is not shm:");
+        }
+        if (slot_count_opt) {
+            const int64_t v = *slot_count_opt;
+            if (v != 0 && (v < kShmSlotCountMin || v > kShmSlotCountMax)) {
+                throw_load("peer '" + *name_opt + "' shm_slot_count "
+                           + std::to_string(v) + " out of range "
+                           + std::to_string(kShmSlotCountMin) + ".."
+                           + std::to_string(kShmSlotCountMax)
+                           + " (0 means default)");
+            }
+            entry.shm_slot_count = static_cast<uint32_t>(v);
+        }
+        if (max_payload_opt) {
+            const int64_t v = *max_payload_opt;
+            if (v != 0 && v < static_cast<int64_t>(kRouterFrameSize)) {
+                throw_load("peer '" + *name_opt + "' shm_max_payload "
+                           + std::to_string(v) + " < kRouterFrameSize ("
+                           + std::to_string(kRouterFrameSize)
+                           + "): cannot hold a RouterFrame");
+            }
+            if (v < 0 || v > kShmMaxPayloadMax) {
+                throw_load("peer '" + *name_opt + "' shm_max_payload "
+                           + std::to_string(v) + " out of range 0.."
+                           + std::to_string(kShmMaxPayloadMax)
+                           + " (0 means default)");
+            }
+            entry.shm_max_payload = static_cast<uint32_t>(v);
+        }
+
         out.peers_.push_back(entry);
 
         // [[peers.sideband]] (optional, may appear multiple times per peer)

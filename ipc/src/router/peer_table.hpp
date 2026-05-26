@@ -51,6 +51,14 @@ struct PeerEntry {
     uint8_t id;
     const char* name;
     PeerAddress local;
+
+    // ADR 0009 — per-peer SHM ring sizing. Only consulted when local.kind is
+    // PeerAddressKind::ShmRing. Zero means "use ShmSpsc::BindParams defaults"
+    // (256 slots × 1024 B payload). Non-zero values must satisfy the
+    // topology-loader validation (slot_count <= 2^20; max_payload between
+    // kRouterFrameSize and 256 MiB).
+    uint32_t shm_slot_count  = 0;
+    uint32_t shm_max_payload = 0;
 };
 
 struct RouterTopology {

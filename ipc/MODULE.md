@@ -271,6 +271,28 @@ profiles — only addresses and transport kind change. See
 [SYSTEM-VISION.md](../robotics-ipc-module/SYSTEM-VISION.md) for the
 deployment matrix.
 
+#### Per-peer SHM ring sizing (Phase D0 / [ADR 0009](../docs/adr/0009-per-peer-ring-sizing.md))
+
+`[[peers]]` entries with `local = "shm:..."` may opt into right-sized
+SHM rings:
+
+```toml
+[[peers]]
+id              = 1
+name            = "sensor"
+local           = "shm:/cpp_tricks_router_sensor"
+shm_slot_count  = 256       # optional; default = ShmSpsc::BindParams (256)
+shm_max_payload = 64        # optional; default = ShmSpsc::BindParams (1024)
+                            # must be >= kRouterFrameSize (64), <= 256 MiB
+```
+
+`shm_max_payload = 64` matches the RouterFrame v2 size, dropping each
+ring's footprint from `2 × 256 × 1028 ≈ 526 KiB` (legacy default) to
+`2 × 256 × 68 ≈ 35 KiB` — a ~15× reduction that fits the router-frame
+ring inside L1/L2 cache. Sideband regions (under
+`[[peers.sideband]]`) have independent sizing and continue to carry
+bulk data. See `jetson_prod.toml` for the recommended SHM profile.
+
 ### Known limitations (deferred)
 
 | Limitation | Today | Resolution |
@@ -281,7 +303,7 @@ deployment matrix.
 | Hardcoded `/tmp/cpp_tricks_*` paths in demos | `ipc/test/router_client_config.h` | Phase B done — TOML profiles in `config/profiles/*.toml`; demos still link the legacy header for the route table |
 | No `eventfd`-based wake on SHM | `try_recv` + 1 ms `sleep_for` (Phase C2) — idle CPU ~1.6% of one core | Phase F: `eventfd` per peer ring (see [ADR 0007](../docs/adr/0007-router-idle-wake.md)) |
 | `dropped_full` does not identify the slow peer | Single global counter on the link | Phase D2a — extend `ShmRouterMetrics` with `dropped_full_per_peer`; required to validate the "Slow recorder" integration scenario |
-| Default `shm_max_payload = 1024` is ~15× larger than RouterFrame v2 (64 B) | Per-peer ring memory inflated; rings spill to L2 | Phase D0 / ADR 0009 — `[[peers]] shm_slot_count` / `shm_max_payload` overrides in TOML topology |
+| Default `shm_max_payload = 1024` is ~15× larger than RouterFrame v2 (64 B) | **Resolved (D0 / ADR 0009)** — `[[peers]] shm_slot_count` / `shm_max_payload` are now optional TOML overrides on SHM peers; `jetson_prod.toml` ships with `256 × 64` per peer; compile-time topologies still use ShmSpsc defaults (sentinel zero in `PeerEntry`) so the demo path is unchanged | — |
 | Datagram link metrics | `DatagramRouterLink<Udp/Uds>` has no metrics; kernel-side drops via `SO_RXQ_OVFL` only | Phase D / E: unified metrics surface across transports |
 | Bridges (Python / Node / MAVLink / vision) | Not present | Phase F: under `examples/bridges/` |
 
@@ -334,6 +356,7 @@ a runner.
 - [docs/adr/0006-shm-backpressure-and-metrics.md](../docs/adr/0006-shm-backpressure-and-metrics.md) — drop-on-full policy + `ShmRouterMetrics`
 - [docs/adr/0007-router-idle-wake.md](../docs/adr/0007-router-idle-wake.md) — `idle_sleep_us` backoff, `eventfd` deferred to Phase F
 - [docs/adr/0008-router-frame-v2.md](../docs/adr/0008-router-frame-v2.md) — RouterFrame v2: 64 B, typed, sequenced, in-frame sideband descriptor
+- [docs/adr/0009-per-peer-ring-sizing.md](../docs/adr/0009-per-peer-ring-sizing.md) — `[[peers]] shm_slot_count` / `shm_max_payload`; right-sizes router-frame rings to one cache line
 - [ipc/SHM_SPSC_TRANSPORT.md](SHM_SPSC_TRANSPORT.md) — single-producer / single-consumer SHM transport details
 - [config/profiles/*.toml](../config/profiles/) — deployment profiles (x86_dev / jetson_prod / hil / sim_cloud)
 - [third_party/tomlplusplus/LICENSE](../third_party/tomlplusplus/LICENSE) — MIT license for vendored toml++ v3.4.0 single-header parser

@@ -5,6 +5,8 @@
 
 #include "router/topology_loader.hpp"
 #include "router/sideband.hpp"
+#include "ipc/shm_spsc.hpp"
+#include "router/frame.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -237,6 +239,147 @@ void test_load_from_file() {
     EXPECT_EQ(topo.route_count(), static_cast<std::size_t>(2));
 }
 
+// ADR 0009 — per-peer SHM ring sizing.
+
+constexpr const char* kShmRingSizingExplicit = R"(
+[router]
+listen = "shm:/router_a"
+
+[[peers]]
+id              = 1
+name            = "sensor"
+local           = "shm:/router_sensor"
+shm_slot_count  = 256
+shm_max_payload = 64
+
+[[peers]]
+id              = 2
+name            = "controller"
+local           = "shm:/router_controller"
+
+[[peers]]
+id              = 3
+name            = "recorder"
+local           = "shm:/router_recorder"
+shm_slot_count  = 1024
+shm_max_payload = 128
+)";
+
+void test_shm_ring_sizing_defaults_when_absent() {
+    // Peer with no shm_slot_count / shm_max_payload keeps the sentinel zero
+    // values; bind helpers interpret zero as "use ShmSpsc::BindParams default."
+    LoadedTopology topo = load_topology_from_toml_string(kShmRingSizingExplicit);
+    const RouterTopology view = topo.view();
+    const PeerEntry* controller = peer_by_id(view, 2);
+    EXPECT(controller != nullptr);
+    if (controller) {
+        EXPECT_EQ(controller->shm_slot_count, static_cast<uint32_t>(0));
+        EXPECT_EQ(controller->shm_max_payload, static_cast<uint32_t>(0));
+    }
+}
+
+void test_shm_ring_sizing_overrides_parsed() {
+    LoadedTopology topo = load_topology_from_toml_string(kShmRingSizingExplicit);
+    const RouterTopology view = topo.view();
+
+    const PeerEntry* sensor = peer_by_id(view, 1);
+    EXPECT(sensor != nullptr);
+    if (sensor) {
+        EXPECT_EQ(sensor->shm_slot_count, static_cast<uint32_t>(256));
+        EXPECT_EQ(sensor->shm_max_payload, static_cast<uint32_t>(64));
+    }
+
+    const PeerEntry* recorder = peer_by_id(view, 3);
+    EXPECT(recorder != nullptr);
+    if (recorder) {
+        EXPECT_EQ(recorder->shm_slot_count, static_cast<uint32_t>(1024));
+        EXPECT_EQ(recorder->shm_max_payload, static_cast<uint32_t>(128));
+    }
+}
+
+void test_shm_ring_sizing_cache_footprint_ratio() {
+    // Quantitative claim from ADR 0009: a router-frame ring sized at
+    // 256 slots × 64 B is ~15× smaller than the legacy 256 × 1024 default.
+    const size_t legacy_bytes  = shm_region_size(256, 1024);
+    const size_t sized_bytes   = shm_region_size(256,   64);
+    EXPECT_EQ(legacy_bytes, static_cast<size_t>(64 + 2 * 256 * 1028));
+    EXPECT_EQ(sized_bytes,  static_cast<size_t>(64 + 2 * 256 *   68));
+    // Ratio comfortably > 14 (exact value ~15.1).
+    EXPECT(legacy_bytes > sized_bytes * 14);
+}
+
+void test_shm_ring_sizing_validation_errors() {
+    // shm_max_payload below kRouterFrameSize is rejected with a frame-aware
+    // error message.
+    expect_load_error(R"(
+[router]
+listen = "shm:/router_a"
+[[peers]]
+id              = 1
+name            = "a"
+local           = "shm:/router_a_peer"
+shm_max_payload = 32
+)", "< kRouterFrameSize");
+
+    // shm_slot_count outside 1..2^20 is rejected.
+    expect_load_error(R"(
+[router]
+listen = "shm:/router_a"
+[[peers]]
+id              = 1
+name            = "a"
+local           = "shm:/router_a_peer"
+shm_slot_count  = 2000000
+)", "shm_slot_count");
+
+    // shm_max_payload way over the cap (set to 1 GiB) is rejected.
+    expect_load_error(R"(
+[router]
+listen = "shm:/router_a"
+[[peers]]
+id              = 1
+name            = "a"
+local           = "shm:/router_a_peer"
+shm_max_payload = 1073741824
+)", "shm_max_payload");
+
+    // shm_* fields on a non-SHM peer are a clear configuration error.
+    expect_load_error(R"(
+[router]
+listen = "uds:/tmp/r.sock"
+[[peers]]
+id              = 1
+name            = "a"
+local           = "uds:/tmp/a.sock"
+shm_max_payload = 64
+)", "local address is not shm:");
+
+    expect_load_error(R"(
+[router]
+listen = "uds:/tmp/r.sock"
+[[peers]]
+id              = 1
+name            = "a"
+local           = "udp:127.0.0.1:5000"
+shm_slot_count  = 256
+)", "local address is not shm:");
+}
+
+void test_shm_ring_sizing_jetson_profile_demonstrates_recommended_values() {
+    // The shipped jetson_prod.toml must demonstrate the ADR 0009 sizing on
+    // every peer; this guards against future profile edits that accidentally
+    // regress the cache-friendly defaults.
+    LoadedTopology topo = load_topology_from_toml_file(
+        "config/profiles/jetson_prod.toml");
+    const RouterTopology view = topo.view();
+    for (size_t i = 0; i < view.peer_count; ++i) {
+        const PeerEntry& p = view.peers[i];
+        EXPECT(p.local.kind == PeerAddressKind::ShmRing);
+        EXPECT_EQ(p.shm_slot_count,  static_cast<uint32_t>(256));
+        EXPECT_EQ(p.shm_max_payload, static_cast<uint32_t>(kRouterFrameSize));
+    }
+}
+
 void test_move_preserves_interned_pointers() {
     // After moving a LoadedTopology, the const char* pointers it handed out
     // through view() must still resolve. (Documented Linux libstdc++/libc++
@@ -348,6 +491,13 @@ int main() {
     test_load_from_file();
     test_move_preserves_interned_pointers();
     test_errors();
+
+    // ADR 0009 — per-peer SHM ring sizing.
+    test_shm_ring_sizing_defaults_when_absent();
+    test_shm_ring_sizing_overrides_parsed();
+    test_shm_ring_sizing_cache_footprint_ratio();
+    test_shm_ring_sizing_validation_errors();
+    test_shm_ring_sizing_jetson_profile_demonstrates_recommended_values();
 
     std::cout << "topology_loader_test: " << (g_total - g_failed) << '/'
               << g_total << " assertions passed\n";

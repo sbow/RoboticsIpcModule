@@ -51,7 +51,7 @@ public:
                 continue;
             }
             IpcEndpoint<ShmSpsc> endpoint;
-            bind_shm_endpoint(endpoint, entry.local, true);
+            bind_shm_endpoint(endpoint, entry, true);  // ADR 0009 per-peer sizing
             peer_channels_.emplace_back(entry.id, std::move(endpoint));
         }
 
@@ -154,7 +154,7 @@ private:
         if (!entry) {
             throw std::runtime_error("unknown peer id");
         }
-        bind_shm_endpoint(endpoint_, entry->local, false);
+        bind_shm_endpoint(endpoint_, *entry, false);  // ADR 0009 per-peer sizing
     }
 
     // Phase C1: drop-on-full (ADR 0006). The router never spins on a slow

@@ -19,6 +19,31 @@ inline void bind_shm_endpoint(
     });
 }
 
+// ADR 0009 — bind a SHM endpoint using per-peer ring sizing overrides on
+// PeerEntry. Zero-valued overrides fall back to ShmSpsc::BindParams defaults,
+// preserving the behavior of compile-time topologies that don't set the
+// optional fields. Used by ShmRouterLink for both the router's per-peer
+// channels and the client's own ring.
+inline void bind_shm_endpoint(
+    IpcEndpoint<ShmSpsc>& endpoint,
+    const PeerEntry& entry,
+    bool create) {
+    if (entry.local.kind != PeerAddressKind::ShmRing) {
+        throw std::runtime_error("shm endpoint expected shm peer address");
+    }
+    ShmSpsc::BindParams params{
+        .name   = entry.local.u.shm_name,
+        .create = create,
+    };
+    if (entry.shm_slot_count != 0) {
+        params.slot_count = entry.shm_slot_count;
+    }
+    if (entry.shm_max_payload != 0) {
+        params.max_payload = entry.shm_max_payload;
+    }
+    endpoint.bind(params);
+}
+
 inline void send_shm_buffer(IpcEndpoint<ShmSpsc>& endpoint, const Buffer& payload) {
     ShmSpsc::SendParams params{.payload = payload};
     endpoint.send(params, payload);

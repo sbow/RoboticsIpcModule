@@ -4,6 +4,12 @@
 # rules as every other profile; the router process unlinks-then-creates each
 # region on startup (ADR 0001 lifecycle).
 #
+# Per-peer ring sizing (ADR 0009): every peer's `local` ring carries the 64 B
+# RouterFrame v2 (ADR 0008), so `shm_max_payload = 64` sizes each slot stride
+# to one cache line. With 256 slots, each peer's SHM region is ~35 KiB — a
+# ~15× reduction vs. the legacy 1024 B slot default. Sideband regions (under
+# `[[peers.sideband]]`) carry bulk data and have their own sizing.
+#
 # Sideband regions (per ADR 0005) are illustrated for the controller peer in
 # anticipation of Phase F vision / ML bridges; the demo controller does not
 # read them today.
@@ -11,24 +17,33 @@
 # Usage:
 #   ./build/ipc/test/router_server --config config/profiles/jetson_prod.toml
 #
-# See: docs/adr/0005-payload-policy-and-sideband.md, SYSTEM-VISION.md.
+# See: docs/adr/0005-payload-policy-and-sideband.md,
+#      docs/adr/0008-router-frame-v2.md,
+#      docs/adr/0009-per-peer-ring-sizing.md,
+#      SYSTEM-VISION.md.
 
 [router]
 listen = "shm:/cpp_tricks_router"
 
 [[peers]]
-id    = 1
-name  = "sensor"
-local = "shm:/cpp_tricks_router_sensor"
+id              = 1
+name            = "sensor"
+local           = "shm:/cpp_tricks_router_sensor"
+shm_slot_count  = 256
+shm_max_payload = 64                 # ADR 0009 — one RouterFrame v2 per slot
 
 [[peers]]
-id    = 2
-name  = "controller"
-local = "shm:/cpp_tricks_router_controller"
+id              = 2
+name            = "controller"
+local           = "shm:/cpp_tricks_router_controller"
+shm_slot_count  = 256
+shm_max_payload = 64
 
   # Example sideband descriptors for Phase F bridges (camera + ML inference).
   # The controller doesn't consume them today, but Phase E systemd units will
   # spin up vision_metadata and ml_inference peers that publish into them.
+  # Sideband regions are independent SHM rings (ADR 0005); the control-plane
+  # ring above stays small even though the sideband payloads are megabytes.
   [[peers.sideband]]
   class             = "vision_nv12"
   name              = "/robot_vision_nv12"
@@ -40,9 +55,11 @@ local = "shm:/cpp_tricks_router_controller"
   max_payload_bytes = 16777216     # 16 MB
 
 [[peers]]
-id    = 3
-name  = "recorder"
-local = "shm:/cpp_tricks_router_recorder"
+id              = 3
+name            = "recorder"
+local           = "shm:/cpp_tricks_router_recorder"
+shm_slot_count  = 256
+shm_max_payload = 64
 
 [[routes]]
 source = 1
