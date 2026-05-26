@@ -14,7 +14,7 @@ Frozen summary of the IPC/router stack. Update STATUS baseline tag when the libr
 | `ipc/MODULE.md` | Public consumption guide (Phase A) |
 | `config/profiles/*.toml` | Deployment profiles (x86_dev / jetson_prod / hil / sim_cloud) — Phase B |
 | `third_party/tomlplusplus/` | Vendored toml++ v3.4.0 single header (MIT) — Phase B |
-| `docs/adr/0001–000N` | IPC/router architecture decisions (0005 = payload + sideband, 0006 = SHM backpressure + metrics, 0007 = router idle-wake) |
+| `docs/adr/0001–000N` | IPC/router architecture decisions (0005 = payload + sideband, 0006 = SHM backpressure + metrics, 0007 = router idle-wake, 0008 = RouterFrame v2) |
 | `robotics-ipc-module/` | Plans, principles, lessons (portable) |
 
 > Code was vendored from `sbow/cpp_tricks` (`cpp_tricks/ipc/...`) as the starting point and is now evolved here. Original paths are preserved inside `ipc/src/` so includes like `"router/foo.hpp"` and `"ipc/foo.hpp"` continue to resolve unchanged.
@@ -29,8 +29,8 @@ Frozen summary of the IPC/router stack. Update STATUS baseline tag when the libr
 
 ## Wire format (today)
 
-- `RouterFrame`: 32 B — control/metadata only in current demo
-- Bulk data (vision, tensors): **not implemented** — Phase B sideband ADR
+- `RouterFrame`: **64 B v2** — typed (`topic_id`), sequenced (`seq`), with in-frame sideband descriptor (`sideband_idx` / `sideband_seq` / `sideband_len`); 32 B inline payload (ADR 0008)
+- Bulk data (vision, tensors): sideband regions per ADR 0005; v2 frame carries the cross-reference
 
 ## Design constraints
 

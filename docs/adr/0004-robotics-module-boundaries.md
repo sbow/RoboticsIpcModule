@@ -64,14 +64,51 @@ Result: library code depends only on library headers; apps may include either ti
 
 ### 3. Wire-format versioning
 
-A `kRouterFrameVersion = 1` constant is added to `ipc/src/router/frame.hpp` and documented as **frozen v1**. The byte layout (offsets 0 / 1..9 / 10..31) is captured in the file header comment so future readers can diff it.
+A `kRouterFrameVersion` constant in `ipc/src/router/frame.hpp` declares the
+current wire layout. Phase A's frozen-v1 contract has been **superseded by
+RouterFrame v2** ([ADR 0008](0008-router-frame-v2.md), 2026-05-25):
+`kRouterFrameVersion = 2`, `kRouterFrameSize = 64`. The current layout
+lives in the `frame.hpp` header comment; the historical v1 block is
+preserved for archeology in ADR 0008's "Context" section.
 
 Any change to frame size, field offsets, or interpretation MUST:
 
 1. Bump `kRouterFrameVersion`.
-2. Ship a migration ADR describing how old and new senders / receivers interoperate (or whether they're incompatible).
+2. Ship a migration ADR describing how old and new senders / receivers
+   interoperate (or whether they're incompatible — v2 chose
+   "incompatible single-deploy migration" per ADR 0008).
 
-No `frame_version` byte is added to the wire today — that would be a breaking change to the existing 22 B payload window and is unnecessary while the module is single-version. If multi-version interop becomes a requirement (e.g. Phase F bridges speak a different dialect), a follow-up ADR can take one byte from the payload window, bump the version, and document the migration.
+No `frame_version` byte is on the wire today — the byte before the
+payload is reserved as part of the `flags` field in v2, and on-wire
+version negotiation is explicitly out of scope (deployments pin a
+version; bridges rebuild). If multi-version coexistence ever becomes a
+requirement (e.g. heterogeneous Phase F bridges), it gets its own ADR.
+
+#### v1 → v2 history (do not regress)
+
+v1 (deprecated, retained here for diffability):
+
+```
+offset  size  field
+ 0      1     source peer id
+ 1      9     monotonic timestamp ns, big-endian
+10     22     payload, zero-padded
+```
+
+v2 (active — see [ADR 0008](0008-router-frame-v2.md) for full table):
+
+```
+offset  size  field
+ 0      1     source
+ 1      1     flags (has_sideband / keyframe / is_ack / eos / priority)
+ 2      2     topic_id
+ 4      4     seq (per-source monotonic, wraps)
+ 8      8     timestamp_ns (host little-endian)
+16      2     sideband_idx (0xFFFF = none)
+18      6     sideband_len (uint48 LE, cap 256 TB)
+24      8     sideband_seq
+32     32     payload
+```
 
 ### 4. In scope for this module
 
@@ -86,8 +123,8 @@ No `frame_version` byte is added to the wire today — that would be a breaking 
 - **Safety certification** (SIL, DO-178C, ISO 26262, redundant routers, formal verification).
 - **In-core DDS / ROS 2 / gRPC** — would re-introduce the heavyweight messaging stacks this module exists to avoid.
 - **In-core Python / Node / CUDA / GStreamer / V4L** — all bridges go under `examples/bridges/` (Phase F), as separate processes. No `pybind11`, no V8, no CUDA kernels in `ipc/src/`.
-- **Raw MAVLink wire bytes inside `RouterFrame` payload** — the 22 B payload window carries control / metadata only; `mavlink_gateway` parses and republishes status frames (see SYSTEM-VISION).
-- **Raw camera pixels inside `RouterFrame` payload** — vision bridges publish metadata frames (frame_id, timestamp, exposure, drop_count); pixel buffers go via a sideband SHM region or DMA buffer (Phase B sideband ADR).
+- **Raw MAVLink wire bytes inside `RouterFrame` payload** — the 32 B v2 payload window carries control / metadata only; `mavlink_gateway` parses and republishes status frames (see SYSTEM-VISION).
+- **Raw camera pixels inside `RouterFrame` payload** — vision bridges publish metadata frames (topic_id, seq, timestamp, sideband_idx/seq/len); pixel buffers go via a sideband SHM region or DMA buffer (ADR 0005; v2 frame carries the descriptor explicitly per ADR 0008).
 - **Cross-machine SHM** — SHM is host-local; cross-host deployments use the UDP profile.
 - **TLS on localhost UDS** — trusted-host assumption for lab / robot use; remote UDP may grow an opt-in TLS ADR later.
 - **Auth / crypto on peer identity** — lab / trusted LAN assumption; signed identity is a separate ADR if needed.
@@ -98,7 +135,7 @@ No `frame_version` byte is added to the wire today — that would be a breaking 
 Until further notice (Phase B may add new public headers, Phase C may add bounded-send overloads, etc.):
 
 - The **three umbrella headers** (`ipc.hpp`, `router_protocol.hpp`, `router_app.h`) and their re-exported sub-headers under `ipc/src/ipc/` and `ipc/src/router/` are stable include paths. Removing or relocating one of them requires an ADR.
-- `kRouterFrameVersion = 1` is the wire contract.
+- `kRouterFrameVersion = 2` is the wire contract (see ADR 0008).
 - The shutdown contract documented in [MODULE.md](../../ipc/MODULE.md) (`install_router_stop_handlers` / `router_stop_flag` / 200 ms recv timeout / `try_recv` + `yield` for SHM) is the supported lifecycle pattern. Apps that block signal handling on an infinite spin are unsupported.
 
 ### 7. Bridges and external integrations

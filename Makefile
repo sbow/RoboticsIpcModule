@@ -56,6 +56,9 @@ IPC_LAST_VALUE_CACHE_TEST := $(IPC_TEST_DIR)/last_value_cache_test
 # Phase C unit tests.
 IPC_SHM_BACKPRESSURE_TEST := $(IPC_TEST_DIR)/shm_backpressure_test
 
+# RouterFrame v2 layout test (ADR 0008).
+IPC_FRAME_TEST            := $(IPC_TEST_DIR)/frame_test
+
 ALL_TARGETS := \
 	$(IPC_ECHO_TEST) \
 	$(IPC_ECHO_SERVER) \
@@ -66,11 +69,12 @@ ALL_TARGETS := \
 	$(IPC_ROUTER_TEST) \
 	$(IPC_TOPOLOGY_LOADER_TEST) \
 	$(IPC_LAST_VALUE_CACHE_TEST) \
-	$(IPC_SHM_BACKPRESSURE_TEST)
+	$(IPC_SHM_BACKPRESSURE_TEST) \
+	$(IPC_FRAME_TEST)
 
 .PHONY: all clean debug help test-ipc test-ipc-shm test-router \
 	test-ipc-unit test-topology-loader test-last-value-cache \
-	test-shm-backpressure \
+	test-shm-backpressure test-frame \
 	ipc-echo-server ipc-echo-client ipc-echo-client-benchmark \
 	ipc-router-server ipc-router-client
 
@@ -117,6 +121,11 @@ $(IPC_SHM_BACKPRESSURE_TEST): $(IPC_ROOT)/test/shm_backpressure_test.cpp \
 		$(IPC_IPC_HEADERS) $(IPC_ROUTER_HEADERS) | $(IPC_TEST_DIR)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(IPC_TEST_FLAGS) $(IPC_TEST_LDFLAGS) -o $@ $<
 
+# RouterFrame v2 layout / accessor test (ADR 0008). No SHM, no fork.
+$(IPC_FRAME_TEST): $(IPC_ROOT)/test/frame_test.cpp \
+		$(IPC_ROUTER_HEADERS) | $(IPC_TEST_DIR)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(IPC_TEST_FLAGS) $(IPC_TEST_LDFLAGS) -o $@ $<
+
 ipc-echo-server:            $(IPC_ECHO_SERVER)
 ipc-echo-client:            $(IPC_ECHO_CLIENT)
 ipc-echo-client-benchmark:  $(IPC_ECHO_CLIENT_BENCHMARK)
@@ -148,7 +157,10 @@ test-last-value-cache: $(IPC_LAST_VALUE_CACHE_TEST)
 test-shm-backpressure: $(IPC_SHM_BACKPRESSURE_TEST)
 	./$(IPC_SHM_BACKPRESSURE_TEST)
 
-test-ipc-unit: test-topology-loader test-last-value-cache test-shm-backpressure
+test-frame: $(IPC_FRAME_TEST)
+	./$(IPC_FRAME_TEST)
+
+test-ipc-unit: test-frame test-topology-loader test-last-value-cache test-shm-backpressure
 
 debug: CXXFLAGS += -g -O0
 debug: clean all
@@ -163,7 +175,8 @@ help:
 	@echo "  make test-ipc            build + run full UDP/UDS/SHM echo benchmark (Phase C: SHM is interruptible)"
 	@echo "  make test-ipc-shm        alias for test-ipc (kept for older docs)"
 	@echo "  make test-router         build + run router scenario test (uds/udp/shm)"
-	@echo "  make test-ipc-unit       Phase B + C unit tests (topology loader, LV cache, shm backpressure)"
+	@echo "  make test-ipc-unit       all unit tests (frame v2, topology loader, LV cache, shm backpressure)"
+	@echo "  make test-frame          build + run RouterFrame v2 layout unit test only"
 	@echo "  make test-topology-loader build + run TOML topology loader unit test only"
 	@echo "  make test-last-value-cache build + run last-value-cache unit test only"
 	@echo "  make test-shm-backpressure build + run Phase C SHM backpressure unit test only"

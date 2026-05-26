@@ -1,9 +1,27 @@
 # ADR 0005: Payload policy and sideband regions
 
-- **Status:** Accepted
+- **Status:** Accepted (active); refined by [ADR 0008](0008-router-frame-v2.md) which adds an in-frame sideband descriptor (`sideband_idx`, `sideband_len`, `sideband_seq`) so subscribers no longer need out-of-band region resolution
 - **Date:** 2026-05-25
-- **Builds on:** [ADR 0001](0001-ipc-and-router.md), [ADR 0004](0004-robotics-module-boundaries.md) (frozen-v1 `RouterFrame`)
+- **Builds on:** [ADR 0001](0001-ipc-and-router.md), [ADR 0004](0004-robotics-module-boundaries.md)
 - **Scope:** What goes in `RouterFrame` vs out-of-band; naming, layout, and lifecycle rules for sideband regions; minimal in-tree API (`ipc/src/router/sideband.hpp`).
+
+> **Refinement:** the original ADR text below was written against the
+> v1 frame (22 B payload, no in-frame sideband descriptor). With
+> [ADR 0008](0008-router-frame-v2.md) the v2 frame carries
+> `sideband_idx`, `sideband_len`, and `sideband_seq` directly, plus a
+> `has_sideband` flag bit. The publisher → subscriber contract is now:
+>
+> 1. Publisher writes bulk bytes to its sideband region at slot N.
+> 2. Publisher emits a `RouterFrame` with `has_sideband=1`,
+>    `sideband_idx = <region index>`, `sideband_seq = N`,
+>    `sideband_len = <bytes>`.
+> 3. Subscriber reads the frame, indexes
+>    `topology.peers[source].sideband[sideband_idx]` to find the region
+>    name and (Phase F) memory class, then pulls/borrows the bytes.
+>
+> The naming convention, `SidebandHeader` layout, and lifecycle rules in
+> the body of this ADR are unchanged. The Phase F `memory_class` TOML
+> field is forward-declared in ADR 0008.
 
 ## Context
 

@@ -165,20 +165,35 @@ A failing grep gates Phase A acceptance:
 
 ## Wire format
 
-`RouterFrame` is 32 bytes — **frozen at version 1** (`kRouterFrameVersion = 1`
-in `ipc/src/router/frame.hpp`):
+`RouterFrame` is **64 bytes — version 2** (`kRouterFrameVersion = 2` in
+`ipc/src/router/frame.hpp`; see [ADR 0008](../docs/adr/0008-router-frame-v2.md)).
+The whole frame fits in one cache line on every supported architecture.
 
-| Offset | Size | Field |
-|--------|------|-------|
-| 0      | 1    | source peer id (stamped by router on forward) |
-| 1..9   | 9    | monotonic timestamp ns, big-endian |
-| 10..31 | 22   | payload, zero-padded |
+| Offset | Size | Field          | Notes |
+|--------|------|----------------|-------|
+| 0      | 1    | `source`       | router-stamped on forward |
+| 1      | 1    | `flags`        | bit 0 has_sideband, bit 1 keyframe, bit 2 is_ack, bit 3 eos, bits 4–6 priority, bit 7 reserved |
+| 2      | 2    | `topic_id`     | publisher-set; subscribers dispatch on this |
+| 4      | 4    | `seq`          | per-source monotonic; wraps; subscriber uses modular arithmetic for gap detection |
+| 8      | 8    | `timestamp_ns` | monotonic ns, host (little-endian) byte order |
+| 16     | 2    | `sideband_idx` | index into source peer's `[[peers.sideband]]` table; `kSidebandIdxNone = 0xFFFF` |
+| 18     | 6    | `sideband_len` | uint48 LE; cap 256 TB |
+| 24     | 8    | `sideband_seq` | slot index / sequence within the sideband region |
+| 32     | 32   | `payload`      | inline scratchpad; zero-padded |
 
-The 22 B payload is for **control / metadata** — sensor scalars, command
-acks, frame ids. Bulk data (camera frames, tensors, MAVLink wire bytes) goes
-through **side channels** defined per peer (Phase B sideband ADR). Any
-breaking change to layout must bump `kRouterFrameVersion` and ship a
-migration ADR — see ADR 0004.
+All multi-byte fields are host (little-endian) byte order. A
+`static_assert` in `frame.hpp` fails compilation on big-endian targets.
+
+The 32 B inline payload is for **control / metadata** — sensor scalars,
+command acks, twists, IMU samples. Bulk data (camera frames, tensors,
+MAVLink wire bytes) goes through **sideband regions** ([ADR 0005](../docs/adr/0005-payload-policy-and-sideband.md));
+v2 carries the `(idx, seq, len)` descriptor in-frame so subscribers find
+the bulk bytes without consulting the topology at runtime.
+
+Any breaking change to layout must bump `kRouterFrameVersion` and ship a
+migration ADR — see [ADR 0004](../docs/adr/0004-robotics-module-boundaries.md)
+and [ADR 0008](../docs/adr/0008-router-frame-v2.md) (v1 → v2 migration).
+The v1 32 B layout is preserved for archeology in ADR 0008.
 
 ## Thread model
 
@@ -230,7 +245,8 @@ make all                    # build every binary under build/ipc/test/
 make test-ipc               # full UDP + UDS + SHM echo benchmark (Phase C: SHM interruptible)
 make test-router            # UDS + UDP + SHM router scenarios
 make test-ipc-shm           # alias for test-ipc (kept for older docs)
-make test-ipc-unit          # Phase B + C unit tests (topology, LV cache, shm backpressure)
+make test-ipc-unit          # all unit tests (frame v2, topology, LV cache, shm backpressure)
+make test-frame             # RouterFrame v2 layout / accessor test
 make test-topology-loader   # topology loader only
 make test-last-value-cache  # last value cache only
 make test-shm-backpressure  # Phase C drop-on-full + metrics unit test
@@ -260,7 +276,8 @@ deployment matrix.
 | Limitation | Today | Resolution |
 |------------|-------|-----------|
 | Client→router SHM publish blocks | `ShmRouterLink::send_to_router` still calls blocking `shm_push_slot`; if the router crashes or stops with a full client req ring, the client hangs until killed | Future ADR — symmetric `try_send_to_router` returning `ShmSendResult` (requires API change to client publish path) |
-| 22 B `RouterFrame` payload | Demo only | Phase B: sideband ADR for vision / tensor / MAVLink-bulk (ADR 0005) |
+| 32 B v2 `RouterFrame` payload | Inline scratchpad sized for control plane only | Use sideband for bulk: v2 frame carries `(sideband_idx, sideband_seq, sideband_len)` directly (ADR 0008); ADR 0005 describes naming + lifecycle |
+| `[[peers.sideband]]` has no `memory_class` field | Topology loader parses name + `max_payload_bytes` only; subscribers infer CPU/CUDA/NvBufSurface out-of-band | Forward-declared in ADR 0008, parsed in Phase F vision/ML bridge work |
 | Hardcoded `/tmp/cpp_tricks_*` paths in demos | `ipc/test/router_client_config.h` | Phase B done — TOML profiles in `config/profiles/*.toml`; demos still link the legacy header for the route table |
 | No `eventfd`-based wake on SHM | `try_recv` + 1 ms `sleep_for` (Phase C2) — idle CPU ~1.6% of one core | Phase F: `eventfd` per peer ring (see [ADR 0007](../docs/adr/0007-router-idle-wake.md)) |
 | `dropped_full` does not identify the slow peer | Single global counter on the link | Phase D: per-peer counter array if profiling shows we need it |
@@ -284,6 +301,7 @@ is still honored if a CI host disallows `/dev/shm`.
 - [docs/adr/0005-payload-policy-and-sideband.md](../docs/adr/0005-payload-policy-and-sideband.md) — control plane vs sideband; SidebandHeader v1
 - [docs/adr/0006-shm-backpressure-and-metrics.md](../docs/adr/0006-shm-backpressure-and-metrics.md) — drop-on-full policy + `ShmRouterMetrics`
 - [docs/adr/0007-router-idle-wake.md](../docs/adr/0007-router-idle-wake.md) — `idle_sleep_us` backoff, `eventfd` deferred to Phase F
+- [docs/adr/0008-router-frame-v2.md](../docs/adr/0008-router-frame-v2.md) — RouterFrame v2: 64 B, typed, sequenced, in-frame sideband descriptor
 - [ipc/SHM_SPSC_TRANSPORT.md](SHM_SPSC_TRANSPORT.md) — single-producer / single-consumer SHM transport details
 - [config/profiles/*.toml](../config/profiles/) — deployment profiles (x86_dev / jetson_prod / hil / sim_cloud)
 - [third_party/tomlplusplus/LICENSE](../third_party/tomlplusplus/LICENSE) — MIT license for vendored toml++ v3.4.0 single-header parser
