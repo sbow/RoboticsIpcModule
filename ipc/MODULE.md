@@ -280,13 +280,45 @@ deployment matrix.
 | `[[peers.sideband]]` has no `memory_class` field | Topology loader parses name + `max_payload_bytes` only; subscribers infer CPU/CUDA/NvBufSurface out-of-band | Forward-declared in ADR 0008, parsed in Phase F vision/ML bridge work |
 | Hardcoded `/tmp/cpp_tricks_*` paths in demos | `ipc/test/router_client_config.h` | Phase B done — TOML profiles in `config/profiles/*.toml`; demos still link the legacy header for the route table |
 | No `eventfd`-based wake on SHM | `try_recv` + 1 ms `sleep_for` (Phase C2) — idle CPU ~1.6% of one core | Phase F: `eventfd` per peer ring (see [ADR 0007](../docs/adr/0007-router-idle-wake.md)) |
-| `dropped_full` does not identify the slow peer | Single global counter on the link | Phase D: per-peer counter array if profiling shows we need it |
+| `dropped_full` does not identify the slow peer | Single global counter on the link | Phase D2a — extend `ShmRouterMetrics` with `dropped_full_per_peer`; required to validate the "Slow recorder" integration scenario |
+| Default `shm_max_payload = 1024` is ~15× larger than RouterFrame v2 (64 B) | Per-peer ring memory inflated; rings spill to L2 | Phase D0 / ADR 0009 — `[[peers]] shm_slot_count` / `shm_max_payload` overrides in TOML topology |
 | Datagram link metrics | `DatagramRouterLink<Udp/Uds>` has no metrics; kernel-side drops via `SO_RXQ_OVFL` only | Phase D / E: unified metrics surface across transports |
 | Bridges (Python / Node / MAVLink / vision) | Not present | Phase F: under `examples/bridges/` |
 
 Phase A's `IPC_SKIP_SHM=1` workaround is retired: `make test-ipc` now
 runs the full UDP/UDS/SHM benchmark end-to-end. The environment variable
 is still honored if a CI host disallows `/dev/shm`.
+
+### Testing framework
+
+This module **does not depend on GoogleTest, Catch2, or any external test
+runner** — that would violate the header-only / no-extra-deps principle.
+Every unit test under `ipc/test/*_test.cpp` uses a lightweight in-repo
+pattern, one `#define` block per file:
+
+```cpp
+int assertions_run = 0;
+int assertions_failed = 0;
+
+#define EXPECT(cond) do {                                                  \
+    ++assertions_run;                                                      \
+    if (!(cond)) {                                                         \
+        ++assertions_failed;                                               \
+        std::cerr << "EXPECT failed @ " << __FILE__ << ':' << __LINE__     \
+                  << " : " #cond "\n";                                     \
+    }                                                                      \
+} while (0)
+
+#define EXPECT_EQ(a, b) /* same shape, with both values printed on fail */
+```
+
+Each test's `main` calls the scenario functions in sequence and prints
+`<test>: N/N assertions passed`; non-zero exit on any failure. This
+pattern is good enough for the four current suites (frame, topology
+loader, last-value cache, SHM backpressure) and is the supported style
+for any new test added in Phase D and beyond. If a future
+fixture-heavy suite makes this painful, an ADR is the bar to introduce
+a runner.
 
 ## Related documents
 

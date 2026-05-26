@@ -9,10 +9,12 @@
 
 | Ready now | Not yet |
 |-----------|---------|
-| UDS/UDP/SHM multi-process router | Deployment profiles (jetson/hil/sim) |
-| Transport-agnostic topology + factories | Sideband video/tensor SHM |
-| SIGTERM-aware poll loops | Python/Node/MAVLink bridges |
-| ADR 0001–0003 | CI, unit tests, latency SLOs |
+| UDS/UDP/SHM multi-process router | Sideband video/tensor SHM (designed in ADR 0005 + 0008; not implemented) |
+| Transport-agnostic topology + factories | Python/Node/MAVLink bridges (Phase F) |
+| Deployment profiles via TOML (Phase B) | Per-peer ring sizing override (Phase D, ADR 0009) |
+| SIGTERM-aware poll loops; idle CPU ≤ 5% on Jetson (Phase C) | CI workflow, full unit-test grid, latency SLOs (Phase D) |
+| RouterFrame v2: 64 B typed + sequenced + in-frame sideband descriptor (ADR 0008) | Time-sync ADR (Phase E4) |
+| ADR 0001–0008; LV cache; SHM backpressure + atomic metrics | Sideband `memory_class` (CPU / CUDA / NvBufSurface, Phase F) |
 
 ## Phase map
 
@@ -51,8 +53,8 @@ Plus phase-specific commands in each plan.
 ## Design principles (summary)
 
 1. **Layers** — transport → adapters → link → node → app; no upward deps.
-2. **Stable peer IDs** — swap addresses via profile YAML (HIL/sim/Jetson/x86).
-3. **Fixed control frame + sideband** — 32 B for metadata/commands; bulk elsewhere.
+2. **Stable peer IDs** — swap addresses via profile TOML (HIL/sim/Jetson/x86).
+3. **Fixed control frame + sideband** — 64 B RouterFrame v2 (ADR 0008) for metadata / commands with an in-frame sideband descriptor; bulk bytes live in sideband SHM regions (ADR 0005).
 4. **Interruptible I/O** — no signal-deaf blocking spin (see lessons learned).
 5. **Bridges outside core** — Python, Node, GStreamer, serial not in `src/`.
 
@@ -83,8 +85,8 @@ Full list: [DESIGN-PRINCIPLES.md](../DESIGN-PRINCIPLES.md).
 
 | Theme | Question |
 |-------|----------|
-| Profile swap | Same peer IDs with `jetson_prod` vs `hil.yaml`? |
-| Determinism | Idle CPU near zero on Jetson? |
+| Profile swap | Same peer IDs with `jetson_prod.toml` vs `hil.toml`? |
+| Determinism | Idle CPU ≤ 5% on Jetson? (Phase C: measured 1.6%) |
 | Interop | Bridge code only under `examples/bridges/`? |
-| Vision | Camera/ML use sideband, not 22 B payload? |
-| Ops | SIGKILL cleanup documented? |
+| Vision | Camera / ML use sideband (referenced by v2 frame's `sideband_idx` / `sideband_seq` / `sideband_len`), not the 32 B inline payload? |
+| Ops | SIGKILL cleanup documented? `/dev/shm/cpp_tricks_*` and `/tmp/cpp_tricks_*.sock` reclaimed? |
