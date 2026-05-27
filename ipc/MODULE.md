@@ -330,6 +330,7 @@ make test-soak              # Phase D3 — loop test-router (override: SOAK_ITER
 make test-leak-check        # Phase D3 — assert no /dev/shm/cpp_tricks_* or /tmp/*.sock leftover after full run
 make test-idle-cpu          # Phase D3 — pidstat router_server, assert <= 5% CPU (60s default window)
 make test-latency-histogram # Phase D3 — throughput variance probe across echo_tests runs (optional)
+make ci                     # Phase D — exact stage list the GitHub Actions PR gate runs (build + unit + integration + router + leak-check, serialized)
 make debug                  # rebuild with -g -O0
 make clean
 ```
@@ -391,6 +392,44 @@ All four scripts emit colour only on a TTY, exit non-zero on the first
 failure they detect, and clean their own SHM / UDS leftovers via `trap`
 so they're safe to chain in `make` or CI without leaving the host in a
 worse state than they found it.
+
+### Continuous integration (Phase D)
+
+`.github/workflows/ci.yml` runs the PR gate on every push to `main` and
+every pull request against `main` (plus `workflow_dispatch` for manual
+re-runs). Steps, in order:
+
+1. `apt-get install build-essential ccache sysstat`
+2. Restore `~/.ccache` (key: `OS-ccache-<hash(Makefile)>-<sha>`,
+   restore-keys fall through to OS-prefix). `g++` is shadowed through
+   `/usr/lib/ccache` so the Makefile is untouched.
+3. `make all` — clean rebuild
+4. `make test-ipc-unit` — 8 binaries, 652 assertions
+5. `make test-ipc-integration` — 5 binaries, 98 assertions
+6. `make test-router` — UDS + UDP + SHM forward scenarios
+7. `bash robotics-ipc-module/scripts/shm_leak_check.sh` — delta == 0 gate
+8. `ccache --show-stats` (always)
+9. `actions/upload-artifact` on failure — uploads `build/ipc/test/`
+   with 7 day retention
+
+Wall-time target is **≤ 3 min** on a standard `ubuntu-latest` runner;
+the job has a hard `timeout-minutes: 5` ceiling to surface a hang
+quickly. `concurrency: cancel-in-progress: true` short-circuits older
+runs on the same ref so fast pushes don't pile up runner minutes.
+
+`make ci` is the local mirror — exact same stages, dispatched as
+sequenced sub-makes so a `-jN` parent doesn't fan out the test
+invocations themselves (some Phase D scenarios bind well-known
+`/dev/shm/cpp_tricks_router_*` paths and would race for the same names
+under parallel execution). Use it before pushing to predict the gate
+without burning a runner.
+
+**Not on the PR gate** (kept opt-in via the targeted `make` targets):
+`test-soak` (multi-minute D3 stress loop), `test-idle-cpu` (60 s
+pidstat sample), `test-latency-histogram` (non-deterministic throughput
+numbers), and `test-ipc` (echo benchmark; output is informational, not
+a gate). A "nightly" workflow can pick these up when their runtime or
+variance calls for it.
 
 ### Known limitations (deferred)
 

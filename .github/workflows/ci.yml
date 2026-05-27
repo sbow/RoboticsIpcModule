@@ -1,0 +1,116 @@
+# Phase D — CI PR gate.
+#
+# Build + run every test suite the local `make ci` target runs, on every
+# push to main and every pull request. Total wall time target: <= 3 min
+# on a standard GitHub-hosted ubuntu-latest runner (D-validation-stress.md
+# "CI wiring" budget).
+#
+# What runs:
+#   - apt install build-essential + ccache + sysstat
+#   - ccache restore (keyed on Makefile + commit; falls through to OS prefix)
+#   - make all                       (clean rebuild every binary)
+#   - make test-ipc-unit             (8 binaries, 652 assertions)
+#   - make test-ipc-integration      (5 binaries, 98 assertions)
+#   - make test-router               (UDS / UDP / SHM forward scenarios)
+#   - shm_leak_check.sh              (delta == 0 over the suite)
+#
+# Not in the PR gate (kept opt-in via workflow_dispatch or local make):
+#   - make test-soak                 (D3 stress — minutes per N)
+#   - make test-idle-cpu             (D3 60 s pidstat window)
+#   - make test-latency-histogram    (D3 perf variance probe)
+#   - make test-ipc                  (echo throughput; non-deterministic numbers)
+# A future "nightly" job can call these on a schedule when their
+# variance / runtime calls for it.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Hand-trigger from the GitHub UI when debugging the workflow itself
+  # or wanting a green check on a long-lived branch.
+  workflow_dispatch:
+
+# Cancel superseded runs for the same ref — saves runner minutes on
+# rapid pushes to a PR branch.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: build + test (gcc / ubuntu-latest)
+    runs-on: ubuntu-latest
+    # Surface hangs fast — the local job finishes well under 2 min, so 5
+    # min is a generous absolute ceiling.
+    timeout-minutes: 5
+
+    env:
+      CXX: g++
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ccache sysstat
+
+      # Cache key is keyed on the Makefile so a build-flag change forces
+      # a fresh ccache miss but doesn't blow the entire object cache
+      # when only source files move. The commit-suffixed primary key is
+      # never reused (so the cache always saves on success); restore-keys
+      # falls through to the nearest Makefile-pinned, then OS-pinned,
+      # snapshot.
+      - name: ccache restore
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ${{ runner.os }}-ccache-${{ hashFiles('Makefile') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-${{ hashFiles('Makefile') }}-
+            ${{ runner.os }}-ccache-
+
+      - name: Configure ccache
+        run: |
+          ccache --max-size=200M --set-config=compression=true
+          # Putting /usr/lib/ccache first in PATH makes `g++` resolve to
+          # ccache's compiler wrapper without changing the Makefile.
+          echo "/usr/lib/ccache" >> $GITHUB_PATH
+          ccache --zero-stats
+
+      - name: Build all
+        run: make all
+
+      - name: Unit tests (test-ipc-unit)
+        run: make test-ipc-unit
+
+      - name: Integration tests (test-ipc-integration)
+        run: make test-ipc-integration
+
+      - name: Router scenarios (test-router)
+        run: make test-router
+
+      - name: SHM / UDS leak check
+        run: bash robotics-ipc-module/scripts/shm_leak_check.sh
+
+      # Always print ccache stats so the cache hit ratio is visible in
+      # logs over time. If it stops being effective, this number drops.
+      - name: ccache stats
+        if: always()
+        run: ccache --show-stats
+
+      # Per the D plan: "Upload build/ipc/test/* on failure for triage."
+      # Successful runs don't upload — keeps the artifact list tidy.
+      - name: Upload build artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-ipc-test-binaries
+          path: build/ipc/test/
+          retention-days: 7
+          if-no-files-found: ignore

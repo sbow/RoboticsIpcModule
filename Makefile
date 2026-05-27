@@ -102,7 +102,9 @@ ALL_TARGETS := \
 	test-datagram-seq test-routing test-resolver test-cli-args \
 	test-ipc-integration test-slow-recorder test-burst-sensor \
 	test-profile-switch test-router-restart test-fault-injection \
+	build-ipc-unit build-ipc-integration \
 	test-soak test-leak-check test-idle-cpu test-latency-histogram \
+	ci \
 	ipc-echo-server ipc-echo-client ipc-echo-client-benchmark \
 	ipc-router-server ipc-router-client
 
@@ -248,13 +250,40 @@ test-resolver: $(IPC_RESOLVER_TEST)
 test-cli-args: $(IPC_CLI_ARGS_TEST)
 	./$(IPC_CLI_ARGS_TEST)
 
-test-ipc-unit: test-frame test-topology-loader test-last-value-cache \
-	test-shm-backpressure test-datagram-seq test-routing test-resolver \
-	test-cli-args
+# Build-only aggregates so `make -jN` can fan out the test compiles
+# without also fanning out the test invocations themselves (some Phase D
+# scenarios bind well-known /dev/shm and /tmp/*.sock paths and would
+# clobber each other if run concurrently — see ipc/MODULE.md).
+.PHONY: build-ipc-unit build-ipc-integration
+build-ipc-unit: $(IPC_FRAME_TEST) $(IPC_TOPOLOGY_LOADER_TEST) \
+	$(IPC_LAST_VALUE_CACHE_TEST) $(IPC_SHM_BACKPRESSURE_TEST) \
+	$(IPC_DATAGRAM_SEQ_TEST) $(IPC_ROUTING_TEST) $(IPC_RESOLVER_TEST) \
+	$(IPC_CLI_ARGS_TEST)
+
+build-ipc-integration: $(IPC_SLOW_RECORDER_TEST) $(IPC_BURST_SENSOR_TEST) \
+	$(IPC_PROFILE_SWITCH_TEST) $(IPC_ROUTER_RESTART_TEST) \
+	$(IPC_FAULT_INJECTION_TEST) $(IPC_ROUTER_SERVER)
+
+# Sequence sub-makes so the children run serially even when the parent
+# was invoked with -j. test-ipc-unit's children are independent today
+# (test-shm-backpressure uses test-private SHM names), but keeping a
+# single ordering rule for both unit and integration aggregates makes
+# the failure mode predictable.
+test-ipc-unit: build-ipc-unit
+	@$(MAKE) test-frame
+	@$(MAKE) test-topology-loader
+	@$(MAKE) test-last-value-cache
+	@$(MAKE) test-shm-backpressure
+	@$(MAKE) test-datagram-seq
+	@$(MAKE) test-routing
+	@$(MAKE) test-resolver
+	@$(MAKE) test-cli-args
 
 # Phase D2 — integration scenarios (no fork: slow_recorder, burst_sensor,
-# profile_switch; subprocess fork: router_restart). router_restart must
-# build router_server first.
+# profile_switch; subprocess fork: router_restart, fault_injection).
+# These must run one at a time: profile_switch_test, router_restart_test
+# and fault_injection_test all bind /cpp_tricks_router_* SHM regions via
+# jetson_prod.toml and would race for the same names under -jN.
 test-slow-recorder: $(IPC_SLOW_RECORDER_TEST)
 	./$(IPC_SLOW_RECORDER_TEST)
 
@@ -270,8 +299,12 @@ test-router-restart: $(IPC_ROUTER_RESTART_TEST) $(IPC_ROUTER_SERVER)
 test-fault-injection: $(IPC_FAULT_INJECTION_TEST) $(IPC_ROUTER_SERVER)
 	./$(IPC_FAULT_INJECTION_TEST)
 
-test-ipc-integration: test-slow-recorder test-burst-sensor \
-	test-profile-switch test-router-restart test-fault-injection
+test-ipc-integration: build-ipc-integration
+	@$(MAKE) test-slow-recorder
+	@$(MAKE) test-burst-sensor
+	@$(MAKE) test-profile-switch
+	@$(MAKE) test-router-restart
+	@$(MAKE) test-fault-injection
 
 # Phase D3 — stress / soak scripts. These wrap the existing test
 # binaries and add timing, leak detection, and CPU regression gates.
@@ -294,6 +327,28 @@ test-idle-cpu: $(IPC_ROUTER_SERVER)
 
 test-latency-histogram: $(IPC_ECHO_TEST)
 	bash robotics-ipc-module/scripts/latency_histogram.sh
+
+# `make ci` mirrors what .github/workflows/ci.yml runs on every PR.
+# Run this before pushing if you want to be sure the gate is green
+# without waiting on a runner. Total wall time on a developer box is
+# typically well under 1 min.
+#
+# Order matters: build first (so test stages fail on the cheapest signal
+# first), then unit (fastest), integration, router scenarios, and finally
+# the leak check (the strictest gate — re-runs the suites and asserts
+# zero leftover /dev/shm or /tmp socket files).
+#
+# Each stage is dispatched via a recursive $(MAKE) so the sub-makes run
+# in series even when the parent is invoked with `-j`. Running the test
+# suites in parallel would have them stomp on each other's /dev/shm and
+# /tmp/*.sock paths (the router scenarios in particular bind well-known
+# names) and produce flaky 0-frame failures.
+ci:
+	@$(MAKE) all
+	@$(MAKE) test-ipc-unit
+	@$(MAKE) test-ipc-integration
+	@$(MAKE) test-router
+	@$(MAKE) test-leak-check
 
 debug: CXXFLAGS += -g -O0
 debug: clean all
@@ -327,6 +382,7 @@ help:
 	@echo "  make test-leak-check     Phase D3 — assert no leaked /dev/shm/ or /tmp/*.sock files"
 	@echo "  make test-idle-cpu       Phase D3 — pidstat router_server, assert <= 5% CPU"
 	@echo "  make test-latency-histogram Phase D3 — throughput variance probe (optional)"
+	@echo "  make ci                  Phase D — mirror the GitHub Actions PR gate locally"
 	@echo "  make ipc-router-server   build router server demo only"
 	@echo "  make ipc-router-client   build router client demo only"
 	@echo "  make debug               rebuild all with -g -O0"
