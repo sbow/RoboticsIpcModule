@@ -71,6 +71,9 @@ IPC_BURST_SENSOR_TEST     := $(IPC_TEST_DIR)/burst_sensor_test
 IPC_PROFILE_SWITCH_TEST   := $(IPC_TEST_DIR)/profile_switch_test
 IPC_ROUTER_RESTART_TEST   := $(IPC_TEST_DIR)/router_restart_test
 
+# Phase D4 fault injection.
+IPC_FAULT_INJECTION_TEST  := $(IPC_TEST_DIR)/fault_injection_test
+
 ALL_TARGETS := \
 	$(IPC_ECHO_TEST) \
 	$(IPC_ECHO_SERVER) \
@@ -90,14 +93,15 @@ ALL_TARGETS := \
 	$(IPC_SLOW_RECORDER_TEST) \
 	$(IPC_BURST_SENSOR_TEST) \
 	$(IPC_PROFILE_SWITCH_TEST) \
-	$(IPC_ROUTER_RESTART_TEST)
+	$(IPC_ROUTER_RESTART_TEST) \
+	$(IPC_FAULT_INJECTION_TEST)
 
 .PHONY: all clean debug help test-ipc test-ipc-shm test-router \
 	test-ipc-unit test-topology-loader test-last-value-cache \
 	test-shm-backpressure test-frame \
 	test-datagram-seq test-routing test-resolver test-cli-args \
 	test-ipc-integration test-slow-recorder test-burst-sensor \
-	test-profile-switch test-router-restart \
+	test-profile-switch test-router-restart test-fault-injection \
 	test-soak test-leak-check test-idle-cpu test-latency-histogram \
 	ipc-echo-server ipc-echo-client ipc-echo-client-benchmark \
 	ipc-router-server ipc-router-client
@@ -190,6 +194,14 @@ $(IPC_ROUTER_RESTART_TEST): $(IPC_ROOT)/test/router_restart_test.cpp \
 		| $(IPC_TEST_DIR)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -pthread $(IPC_TEST_LDFLAGS) -o $@ $<
 
+# Phase D4 — fault injection. Pulls in toml.hpp (Scenario 5 calls
+# load_topology_from_toml_string directly) and the router_server
+# binary (Scenario 6 spawns it via execv for the SIGKILL test).
+$(IPC_FAULT_INJECTION_TEST): $(IPC_ROOT)/test/fault_injection_test.cpp \
+		$(IPC_IPC_HEADERS) $(IPC_ROUTER_HEADERS) \
+		$(THIRD_PARTY)/tomlplusplus/toml.hpp | $(IPC_TEST_DIR)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(IPC_TEST_FLAGS) $(IPC_TEST_LDFLAGS) -o $@ $<
+
 ipc-echo-server:            $(IPC_ECHO_SERVER)
 ipc-echo-client:            $(IPC_ECHO_CLIENT)
 ipc-echo-client-benchmark:  $(IPC_ECHO_CLIENT_BENCHMARK)
@@ -255,8 +267,11 @@ test-profile-switch: $(IPC_PROFILE_SWITCH_TEST)
 test-router-restart: $(IPC_ROUTER_RESTART_TEST) $(IPC_ROUTER_SERVER)
 	./$(IPC_ROUTER_RESTART_TEST)
 
+test-fault-injection: $(IPC_FAULT_INJECTION_TEST) $(IPC_ROUTER_SERVER)
+	./$(IPC_FAULT_INJECTION_TEST)
+
 test-ipc-integration: test-slow-recorder test-burst-sensor \
-	test-profile-switch test-router-restart
+	test-profile-switch test-router-restart test-fault-injection
 
 # Phase D3 — stress / soak scripts. These wrap the existing test
 # binaries and add timing, leak detection, and CPU regression gates.
@@ -307,6 +322,7 @@ help:
 	@echo "  make test-burst-sensor   Phase D2 — SourceSeqTracker accounting under burst publish"
 	@echo "  make test-profile-switch Phase D2 — load jetson_prod + hil profiles back-to-back"
 	@echo "  make test-router-restart Phase D2 — SIGKILL router; next bind succeeds (SHM cleanup)"
+	@echo "  make test-fault-injection Phase D4 — truncated UDP / unknown source / wrong UDS path / SIGKILL mid-traffic"
 	@echo "  make test-soak           Phase D3 — loop test-router (SOAK_ITERATIONS=10 default)"
 	@echo "  make test-leak-check     Phase D3 — assert no leaked /dev/shm/ or /tmp/*.sock files"
 	@echo "  make test-idle-cpu       Phase D3 — pidstat router_server, assert <= 5% CPU"

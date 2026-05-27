@@ -82,7 +82,7 @@ graph (e.g. embedded microcontroller bridges) can ignore them.
 | `router/topology_loader.hpp` | TOML 1.0 loader (`load_topology_from_toml_string` / `load_topology_from_toml_file`) → owning `LoadedTopology` (returns a `RouterTopology` view + `RouteRule[]` + per-peer `SidebandRegion[]`). Requires the vendored toml++ header. |
 | `router/last_value_cache.hpp` | `LastValueCache<N=256>` — subscriber-side latest-frame-per-source cache. Thread-unsafe by design; one cache per consumer thread. |
 | `router/source_seq_tracker.hpp` | `SourceSeqTracker<N=256>` — subscriber-side per-source `RouterFrame::seq()` tracker (Phase D1). Classifies each observation as First / InOrder / Gap / Duplicate / OutOfOrder; counts gap totals using `uint32_t` modular arithmetic (handles 2³² wrap). Pairs with `LastValueCache` on the read path. Thread-unsafe by design. |
-| `router/metrics.hpp` | `ShmRouterMetrics` (Phase C3 + D2a) — atomic counters: aggregate `forwarded` / `dropped_full` / `recv_empty` / `recv_truncated`, plus `dropped_full_per_peer[256]` for per-destination drop attribution. Reached via `ShmRouterLink::metrics()`. See [ADR 0006](../docs/adr/0006-shm-backpressure-and-metrics.md). |
+| `router/metrics.hpp` | `ShmRouterMetrics` (Phase C3 + D2a) — atomic counters: aggregate `forwarded` / `dropped_full` / `recv_empty` / `recv_truncated`, plus `dropped_full_per_peer[256]` for per-destination drop attribution. Reached via `ShmRouterLink::metrics()`. `DatagramRouterMetrics` (Phase D4) — UDP / UDS counterpart: `forwarded` / `recv_truncated` / `recv_unknown_source` / `recv_empty` (parity placeholder, not yet driven). Reached via `DatagramRouterLink<T>::metrics()`. See [ADR 0006](../docs/adr/0006-shm-backpressure-and-metrics.md). |
 
 ### SHM backpressure & metrics (Phase C1 / C3)
 
@@ -138,6 +138,45 @@ for (uint8_t id : interesting_peer_ids) {
 Index `0` is `kEndpointInvalid` and index `255` is `kEndpointServer`;
 both stay at zero in well-formed topologies. Verified end-to-end by
 `shm_backpressure_test` and the `slow_recorder_test` integration scenario.
+
+### Datagram link metrics (Phase D4)
+
+`DatagramRouterLink<Udp>` and `DatagramRouterLink<Uds>` now expose the
+same kind of counter surface as the SHM link, scoped to what's
+observable from inside `recvfrom()` on a datagram socket:
+
+```cpp
+#include "router/link.hpp"
+#include "router/metrics.hpp"
+
+DatagramRouterServer<Udp> server(topo);
+server.bind_router({.port = 9000});
+// ... run forwarding loop ...
+
+const DatagramRouterMetrics& m = server.link().metrics();
+const uint64_t trunc   = m.recv_truncated.load(std::memory_order_relaxed);
+const uint64_t unknown = m.recv_unknown_source.load(std::memory_order_relaxed);
+const uint64_t fwd     = m.forwarded.load(std::memory_order_relaxed);
+```
+
+| Counter | Increments when |
+|---|---|
+| `forwarded` | A frame copy was successfully `sendto()`'d to a destination peer (one increment per destination per frame). |
+| `recv_truncated` | A datagram arrived with `buf.size < kRouterFrameSize`. Frame discarded; catches buggy clients and partial sends. |
+| `recv_unknown_source` | A datagram arrived from a `(host, port)` / socket path not in the topology. Frame discarded; catches misconfigured peers and spoofed traffic at the router boundary. |
+| `recv_empty` | **Not driven yet.** Field is present for parity with `ShmRouterMetrics`. Datagram `recv()` throws `runtime_error` on `SO_RCVTIMEO`; the outer `RouterServer::run` loop catches it. A driven counter would require a non-throwing `try_recv` variant on the datagram transport — deferred until a consumer needs it. |
+
+Kernel-side drops (`SO_RXQ_OVFL`, `SO_RCVBUF` overruns) are **not** in
+this struct — they're queryable via `getsockopt(SOL_SOCKET, SO_RXQ_OVFL)`
+but require an explicit poll loop that today's `RouterServer::run`
+doesn't have. Phase E or a future ADR may add a "kernel drop sampler"
+on a per-link basis.
+
+The same ownership pattern as `ShmRouterMetrics` applies: the metrics
+block is heap-allocated once per link (`std::unique_ptr<...>`), the link
+itself stays movable (atomics aren't), and the reference returned by
+`metrics()` is valid for the link's lifetime. Verified by the
+`fault_injection_test` Phase D4 binary.
 
 ### Idle CPU and backoff (Phase C2)
 
@@ -286,6 +325,7 @@ make test-slow-recorder     # Phase D2 — per-peer drop attribution under slow 
 make test-burst-sensor      # Phase D2 — SourceSeqTracker accounting under burst publish
 make test-profile-switch    # Phase D2 — load jetson_prod + hil profiles back-to-back
 make test-router-restart    # Phase D2 — SIGKILL router; next bind succeeds (SHM cleanup)
+make test-fault-injection   # Phase D4 — truncated UDP / unknown source / wrong UDS path / SIGKILL mid-traffic / TOML reject
 make test-soak              # Phase D3 — loop test-router (override: SOAK_ITERATIONS=N)
 make test-leak-check        # Phase D3 — assert no /dev/shm/cpp_tricks_* or /tmp/*.sock leftover after full run
 make test-idle-cpu          # Phase D3 — pidstat router_server, assert <= 5% CPU (60s default window)
@@ -363,7 +403,7 @@ worse state than they found it.
 | No `eventfd`-based wake on SHM | `try_recv` + 1 ms `sleep_for` (Phase C2) — idle CPU ~1.6% of one core | Phase F: `eventfd` per peer ring (see [ADR 0007](../docs/adr/0007-router-idle-wake.md)) |
 | `dropped_full` does not identify the slow peer | Single global counter on the link | Phase D2a — extend `ShmRouterMetrics` with `dropped_full_per_peer`; required to validate the "Slow recorder" integration scenario |
 | Default `shm_max_payload = 1024` is ~15× larger than RouterFrame v2 (64 B) | **Resolved (D0 / ADR 0009)** — `[[peers]] shm_slot_count` / `shm_max_payload` are now optional TOML overrides on SHM peers; `jetson_prod.toml` ships with `256 × 64` per peer; compile-time topologies still use ShmSpsc defaults (sentinel zero in `PeerEntry`) so the demo path is unchanged | — |
-| Datagram link metrics | `DatagramRouterLink<Udp/Uds>` has no metrics; kernel-side drops via `SO_RXQ_OVFL` only | Phase D / E: unified metrics surface across transports |
+| Datagram link metrics | **Resolved (D4)** — `DatagramRouterMetrics { forwarded, recv_truncated, recv_unknown_source, recv_empty }` in `router/metrics.hpp`, heap-owned by `DatagramRouterLink<T>`, exposed via `link.metrics()`. `recv_empty` is a parity placeholder (datagram recv() throws on SO_RCVTIMEO; counter deferred). Kernel-side drops (`SO_RXQ_OVFL` / `SO_RCVBUF` stats) remain a Phase E follow-up | — |
 | Bridges (Python / Node / MAVLink / vision) | Not present | Phase F: under `examples/bridges/` |
 
 Phase A's `IPC_SKIP_SHM=1` workaround is retired: `make test-ipc` now
@@ -398,13 +438,14 @@ Each test's `main` calls the scenario functions in sequence and prints
 pattern carries every current suite — eight unit binaries
 (`make test-ipc-unit`, 652 assertions: frame, topology loader,
 last-value cache, SHM backpressure, datagram seq tracker, routing,
-resolver, CLI args) and four Phase D2 integration binaries
-(`make test-ipc-integration`, 64 assertions: slow recorder, burst
-sensor, profile switch, router restart). It is the supported style for
-any new test added in Phase D and beyond. If a future fixture-heavy
-suite makes this painful, an ADR is the bar to introduce a runner.
+resolver, CLI args) and five integration binaries
+(`make test-ipc-integration`, 98 assertions: slow recorder, burst
+sensor, profile switch, router restart, fault injection). It is the
+supported style for any new test added in Phase D and beyond. If a
+future fixture-heavy suite makes this painful, an ADR is the bar to
+introduce a runner.
 
-The D2 integration suite uses two patterns:
+The integration suite uses two patterns:
 
   * **In-process, thread-per-role.** `slow_recorder_test`,
     `burst_sensor_test`, and `profile_switch_test` build the router
@@ -413,10 +454,22 @@ The D2 integration suite uses two patterns:
     thread owns exactly one endpoint to honour the SPSC contract. No
     fork, no SIGTERM dance, deterministic teardown via atomic stop
     flags + `join()`.
-  * **Subprocess, fork + signal.** `router_restart_test` execs
-    `router_server` with `--config` to verify recovery from SIGKILL.
+  * **Subprocess, fork + signal.** `router_restart_test` and
+    `fault_injection_test` exec `router_server` with `--config` to
+    verify recovery from SIGKILL (idle and mid-traffic respectively).
     Uses the same `spawn_child` / `waitpid` idiom as `router_test.cpp`
-    so the surface is familiar.
+    so the surface is familiar. `fault_injection_test` wraps the reap
+    sequence in a bounded helper (`reap_bounded()`) that escalates
+    SIGTERM → SIGKILL on a deadline — parent → child signal delivery
+    has been observed to be flaky in some sandboxed CI hosts, and an
+    indefinite `waitpid` would hang `make test-leak-check`.
+
+`fault_injection_test` also covers in-process datagram bind paths
+(scenarios 1-4 — truncated UDP, unknown-source UDP, wrong UDS path,
+UDS rebind after stale socket) and a TOML loader fault path
+(scenario 5 — `shm_max_payload < kRouterFrameSize`). UDP scenarios
+`[skip]` gracefully when `socket(AF_INET, ...)` or the subsequent
+`bind()` is refused by the host sandbox.
 
 ## Related documents
 

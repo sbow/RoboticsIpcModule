@@ -137,10 +137,41 @@ ShmRouterMetrics&`. The reference is stable for the lifetime of the link
 (moves transfer the `unique_ptr` but the heap-allocated metrics block
 itself does not relocate).
 
-Datagram links (`DatagramRouterLink<Udp>`, `DatagramRouterLink<Uds>`) do
-not own metrics yet — their drop semantics live in the kernel and are
-surfaced differently (`SO_RXQ_OVFL`, `/proc/net/udp`). A unified metrics
-struct that abstracts both is a Phase E concern (status/health bridge).
+Datagram links (`DatagramRouterLink<Udp>`, `DatagramRouterLink<Uds>`)
+now own a parallel metrics struct as of Phase D4:
+
+```cpp
+struct DatagramRouterMetrics {
+    std::atomic<uint64_t> forwarded{0};
+    std::atomic<uint64_t> recv_truncated{0};
+    std::atomic<uint64_t> recv_unknown_source{0};
+    std::atomic<uint64_t> recv_empty{0};       // parity placeholder, not driven yet
+};
+```
+
+Counter semantics:
+
+| Counter               | When it increments                                                          |
+|-----------------------|-----------------------------------------------------------------------------|
+| `forwarded`           | one per (source frame × destination peer) `sendto()`'d                      |
+| `recv_truncated`      | `recvfrom()` returned fewer than `kRouterFrameSize` bytes; datagram dropped |
+| `recv_unknown_source` | `recvfrom()` peer doesn't match any topology entry; datagram dropped        |
+| `recv_empty`          | (placeholder) — `recv()` throws on SO_RCVTIMEO so the outer loop catches it; a driven counter needs a non-throwing `try_recv` first |
+
+`DatagramRouterMetrics` is heap-owned via `std::unique_ptr<...>` on
+`DatagramRouterLink<T>` (same Phase C movability pattern), exposed via
+`link.metrics()`. There is **no** `dropped_full` family: a UDP/UDS
+sendto can't observe the destination peer's buffer state from the
+router process. Kernel-side drops (`SO_RXQ_OVFL`, `SO_RCVBUF`
+overruns) remain queryable via `getsockopt` but require an explicit
+poll loop and are deferred to a future status-bridge ADR (Phase E).
+
+Verified by `fault_injection_test` Scenarios 1-2 (Phase D4):
+
+```
+truncated UDP: recv_truncated=2 forwarded=1 recv_unknown_source=0
+unknown UDP:   recv_unknown_source=2 forwarded=1 recv_truncated=0
+```
 
 ### Module API surface
 
@@ -161,9 +192,12 @@ a new ADR.
   forwarding health without parsing logs.
 - Drop policy is explicit and auditable: every frame the router decides
   not to deliver is counted, never silently swallowed.
-- The metrics-via-`unique_ptr` pattern can be reused for
-  `DatagramRouterLink` in Phase D / E without changing the link's move
-  semantics.
+- The metrics-via-`unique_ptr` pattern *was* reused for
+  `DatagramRouterLink` in Phase D4 — same heap-owned counter block,
+  same `metrics()` accessor shape, same lifetime guarantees. The
+  decision to allocate per-link instead of stamping atomics into the
+  link object proved correct: extending the link with metrics
+  required zero changes to call sites.
 
 ### Negative
 

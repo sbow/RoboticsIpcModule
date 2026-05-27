@@ -4,11 +4,13 @@
 #include "ipc/endpoint.hpp"
 #include "router/datagram_peer_resolver.hpp"
 #include "router/frame.hpp"
+#include "router/metrics.hpp"
 #include "router/peer_address_io.hpp"
 #include "router/peer_table.hpp"
 #include "router/routing.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -70,12 +72,22 @@ public:
         Buffer buf = frame.writable();
         endpoint_.recv(buf, recv);
 
+        // Phase D4 — truncated datagram fault gate. A peer that sent fewer
+        // than kRouterFrameSize bytes (buggy client, partial send on a
+        // lossy link, hostile traffic) is dropped and counted. Without
+        // the counter this failure was invisible — see ADR 0006 update.
         if (buf.size < kRouterFrameSize) {
+            metrics_->recv_truncated.fetch_add(1, std::memory_order_relaxed);
             return {};
         }
 
         const uint8_t source = peer_id_from_recv<Transport>(topo_, recv);
         if (source == kEndpointInvalid) {
+            // Phase D4 — datagram arrived from a (host, port) / socket path
+            // that is not in the topology. Almost always a peer pointed at
+            // the wrong listen address; could also be spoofed traffic.
+            // Frame discarded.
+            metrics_->recv_unknown_source.fetch_add(1, std::memory_order_relaxed);
             return {};
         }
 
@@ -87,9 +99,15 @@ public:
         result.targets = route_targets_for(rules, rule_count, source);
         for (uint8_t dest : result.targets) {
             send_to_peer(dest, buf);
+            metrics_->forwarded.fetch_add(1, std::memory_order_relaxed);
         }
         return result;
     }
+
+    // Phase D4 — read-only metrics handle. Lives for the link's lifetime
+    // (heap-allocated via unique_ptr so std::atomic members don't make
+    // the link non-movable; same trick as ShmRouterLink, Phase C3).
+    const DatagramRouterMetrics& metrics() const noexcept { return *metrics_; }
 
     void send_to_router(const RouterFrame& frame) {
         if (is_server_) {
@@ -160,6 +178,9 @@ private:
     bool is_server_;
     uint8_t peer_id_;
     IpcEndpoint<Transport> endpoint_;
+    // Heap-owned so the link stays movable (atomics are non-movable).
+    std::unique_ptr<DatagramRouterMetrics> metrics_
+        = std::make_unique<DatagramRouterMetrics>();
 };
 
 template<DatagramTransport Transport>

@@ -9,7 +9,7 @@ Frozen summary of the IPC/router stack. Update STATUS baseline tag when the libr
 | Path | Role |
 |------|------|
 | `ipc/src/ipc/` | Transports: UDP, UDS, SHM SPSC, echo, shutdown |
-| `ipc/src/router/` | Frame, topology, links, facades, factories, sideband, topology loader, last-value cache, lifecycle, **metrics (Phase C)**, **source-seq tracker (Phase D1)** |
+| `ipc/src/router/` | Frame, topology, links, facades, factories, sideband, topology loader, last-value cache, lifecycle, **metrics (Phase C — SHM; Phase D4 — Datagram)**, **source-seq tracker (Phase D1)** |
 | `ipc/test/` | Demos + unit tests — **not** the shipped module API |
 | `ipc/MODULE.md` | Public consumption guide (Phase A) |
 | `robotics-ipc-module/scripts/` | Phase D3 stress/soak wrappers (soak / leak-check / idle-CPU / latency-histogram) |
@@ -44,8 +44,8 @@ See [DESIGN-PRINCIPLES.md](DESIGN-PRINCIPLES.md). Summary: no virtual hot path, 
 - Phase D1 closed: subscriber-side `SourceSeqTracker` (uint32 seq, 2³² wrap-aware) ships as a library header; topology loader rejects self-routing; 8 unit-test binaries / 652 assertions
 - Phase D2 closed: per-peer drop attribution (`ShmRouterMetrics::dropped_full_per_peer[256]`, additive on ADR 0006); 4 integration binaries (slow recorder / burst sensor / profile switch / router restart) / 64 assertions
 - Phase D3 closed: stress/soak shell scripts under `robotics-ipc-module/scripts/` + `make test-soak / test-leak-check / test-idle-cpu / test-latency-histogram`; leak check globs `/dev/shm/cpp_tricks_*` + `/tmp/cpp_tricks_*.sock` around the full unit+integration+router pass; idle-CPU gate at ≤ 5 % (ADR 0007 regression)
+- Phase D4 closed: `DatagramRouterMetrics { forwarded, recv_truncated, recv_unknown_source, recv_empty }` heap-owned by `DatagramRouterLink<T>` (mirrors `ShmRouterMetrics` pattern, ADR 0006 update); new `fault_injection_test` (34 assertions, 6 scenarios — truncated UDP, unknown-source UDP, wrong UDS path, UDS rebind, TOML reject, SIGKILL mid-traffic). `test-ipc-integration` now 98/98 across 5 binaries.
 - Client→router SHM publish still blocks on full ring (separate ADR, future)
-- Datagram links (UDP/UDS) have no metrics yet — Phase D / E
 - `eventfd`-based idle wake deferred to Phase F (sleep_for backoff meets the 5%-CPU bar today)
 - No Python/Node/MAVLink until Phase F examples
 
