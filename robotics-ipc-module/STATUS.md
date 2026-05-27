@@ -45,7 +45,7 @@
 - [x] C1 SHM `try_send` / bounded wait — `ShmSendResult { Ok, Full }` + `shm_try_push_slot` + `ShmSpsc::try_send`; `ShmRouterLink::send_to_peer` drops on Full instead of spinning; client→router blocking publish documented as a known limitation in MODULE.md (separate ADR future). Echo benchmark client now uses interruptible try_send+try_recv path; `IPC_SKIP_SHM` default removed from `make test-ipc`.
 - [x] C2 Idle wake — `RouterRunOptions::idle_sleep_us` (default 1 ms) replaces unconditional `yield()`. Measured idle CPU dropped from 100% → 1.63% of one core over 60 s on `jetson_prod.toml`. `eventfd` path documented and deferred in [ADR 0007](../docs/adr/0007-router-idle-wake.md).
 - [x] C3 Router metrics — `ipc/src/router/metrics.hpp` with `ShmRouterMetrics { forwarded, dropped_full, recv_empty, recv_truncated }`; `ShmRouterLink::metrics()` returns a stable reference (heap-allocated; link stays movable). See [ADR 0006](../docs/adr/0006-shm-backpressure-and-metrics.md).
-- [ ] C4 Datagram seq — optional, deferred to Phase D / F (no in-tree consumer yet that needs newest-only sequencing on UDP).
+- [x] C4 Datagram seq — **closed in Phase D1 / D2** by `ipc/src/router/source_seq_tracker.hpp` (per-source uint32 tracker with 2³² wrap-aware classification) + `burst_sensor_test` (5000-frame burst with `samples + gaps == seq_range` invariant under right-sized rings). Originally deferred; the D-phase consumer materialised on schedule.
 
 ### Phase D deliverables
 
@@ -54,7 +54,6 @@
 - [x] D2 Integration — `slow_recorder_test` (D2a per-peer drop attribution gate), `burst_sensor_test` (closes deferred C4 via `SourceSeqTracker`), `profile_switch_test` (jetson_prod SHM ↔ hil UDP round-trip), `router_restart_test` (SIGKILL + re-bind); **4 binaries / 64 assertions**. D2a: `ShmRouterMetrics::dropped_full_per_peer[256]` (ADR 0006 closed-loop), aggregate counter preserved
 - [x] D3 Stress/soak — `robotics-ipc-module/scripts/{soak_router,shm_leak_check,idle_cpu_check,latency_histogram}.sh` + `make test-soak` / `test-leak-check` / `test-idle-cpu` / `test-latency-histogram`; `SOAK_ITERATIONS=10` default; leak check globs `/dev/shm/cpp_tricks_*` + `/tmp/cpp_tricks_*.sock` and asserts delta == 0 across full unit + integration + router pass; idle-CPU gate at ≤ 5% (post-fix baseline 1.5–1.7%) for the ADR 0007 regression
 - [x] D4 Fault injection — `ipc/test/fault_injection_test.cpp` (34 assertions, 6 scenarios: truncated UDP, unknown-source UDP, wrong UDS path, UDS rebind after stale socket, `shm_max_payload < kRouterFrameSize` loader reject, SIGKILL mid-traffic SHM recovery). New `DatagramRouterMetrics { forwarded, recv_truncated, recv_unknown_source, recv_empty }` heap-owned by `DatagramRouterLink<T>` mirrors the SHM counter surface (ADR 0006 update) — closes the "datagram links have no metrics" limitation from MODULE.md
-- [ ] CI workflow (PR gate)
 - [ ] CI workflow (PR gate)
 
 ### Phase E deliverables
