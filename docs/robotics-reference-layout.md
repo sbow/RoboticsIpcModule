@@ -25,7 +25,7 @@ This is a **deployment-shape document**. It documents the contract surface (peer
 | Topic | Where it lives |
 |-------|----------------|
 | `sd_notify` / systemd readiness | Beyond Phase E2 ([deploy/systemd/](../robotics-ipc-module/deploy/systemd/) ships `Type=simple` units; readiness signaling deferred — see parked review C6) |
-| Cross-host time correlation | Phase E E4 (timestamp ADR) |
+| Cross-host time correlation | Beyond Phase E4 ([ADR 0010](adr/0010-router-timestamp-clock.md) lands `CLOCK_MONOTONIC_RAW` for single-host scope; cross-host delegated to user code or a future dedicated recorder — see parked review C8) |
 | Python / Node / MAVLink bridge code | Phase F F2–F4 |
 | Vision peer + camera capture code | Phase F F5 |
 | Sideband `memory_class` (CUDA / NvBufSurface) parsing | Phase F (forward-declared in [ADR 0008](adr/0008-router-frame-v2.md)) |
@@ -167,7 +167,7 @@ The router stays transport-only. Every domain integration (camera, ML, serial) i
 | `flags` | `keyframe` bit for I-frames; `has_sideband` bit always set |
 | `topic_id` | Camera index (e.g. 0x10 left, 0x11 right) |
 | `seq` | Monotonic per-camera frame counter |
-| `timestamp_ns` | Capture time (see [ADR 0008](adr/0008-router-frame-v2.md) field semantics); E4 will pin the clock choice — until then, router-relative ns from forward path |
+| `timestamp_ns` | Capture time per [ADR 0008](adr/0008-router-frame-v2.md) field semantics; clock is [`CLOCK_MONOTONIC_RAW`](adr/0010-router-timestamp-clock.md) — peers stamp via `router_now_ns()` from [`router/timestamp.hpp`](../ipc/src/router/timestamp.hpp) for single-host comparability with router-stamped frames |
 | `sideband_idx` | Index into the peer's `[[peers.sideband]]` array |
 | `sideband_seq` | Producer's slot index in the sideband ring (subscriber reads it back) |
 | `sideband_len` | Bytes valid in the slot (`u48`, up to 256 TB) |
@@ -233,9 +233,23 @@ Today only `name` / `max_payload_bytes` / optional `version` are parsed; `class`
 
 ## Operational notes
 
-### Cross-host time
+### Time semantics
 
-The router stamps `timestamp_ns` with a process-local `steady_clock` reading on the forward path. This is fine for single-host correlation **only when the router has not restarted**; it is not comparable across hosts. Phase E E4 ([plan](../robotics-ipc-module/plans/E-robotics-integration.md#e4--time-sync)) will land the timestamp policy (`CLOCK_MONOTONIC_RAW` vs PTP-anchored). See also [parked review C8](../robotics-ipc-module/plans/post-phases-robotics-review.md#c8--cross-host-time-sync-ptp--ntp).
+The router stamps `timestamp_ns` with `CLOCK_MONOTONIC_RAW` per [ADR 0010](adr/0010-router-timestamp-clock.md). Properties:
+
+- **Single-host, since-boot.** Comparable across processes on the same host within a boot epoch.
+- **Slew-free.** Unaffected by NTP / `adjtime` — control-loop deadlines computed from frame timestamps don't see spooky jitter.
+- **Survives router restart.** systemd `Restart=on-failure` does not reset the clock; subscribers can latch monotonically across router lifetime.
+- **Resets on reboot. Not comparable across hosts.**
+
+User peers that want to stamp their own frames with the same clock include [`router/timestamp.hpp`](../ipc/src/router/timestamp.hpp) and call `router_now_ns()`.
+
+**Cross-host correlation is delegated** ([ADR 0010 §Out of scope](adr/0010-router-timestamp-clock.md)):
+
+- **Application-level.** A peer that needs cross-host (HIL, sim_cloud) time correlation adds its own clock reading (PTP-anchored, sim-time, wall clock) inside its custom 32 B payload or in a sideband region. The router transports those bytes opaquely.
+- **Future dedicated recorder module.** A stateful recorder — the kind needed for replay per [parked review C4](../robotics-ipc-module/plans/post-phases-robotics-review.md#c4--playback--simulation-testing-on-x86) — is the natural home for richer time semantics (PTP, capture-time, host clock skew tracking). Its relaxed latency / statelessness requirements make it the right place to absorb the complexity that the hot-path router refuses.
+
+See also [parked review C8](../robotics-ipc-module/plans/post-phases-robotics-review.md#c8--cross-host-time-sync-ptp--ntp) — single-host portion is closed by ADR 0010; cross-host portion remains in the backlog as a *delegation*, not a deferred deliverable.
 
 ### Process supervision
 
@@ -266,7 +280,7 @@ The [`shm_leak_check.sh`](../robotics-ipc-module/scripts/shm_leak_check.sh) scri
 |-------|----------------|
 | systemd unit files | [robotics-ipc-module/deploy/systemd/](../robotics-ipc-module/deploy/systemd/) (Phase E E2) |
 | Bridge pointers / scaffolding | [examples/bridges/](../examples/bridges/) (Phase E E3 scaffolding) |
-| Timestamp ADR (`CLOCK_MONOTONIC_RAW` vs PTP) | [Phase E E4](../robotics-ipc-module/plans/E-robotics-integration.md#e4--time-sync) |
+| Timestamp clock | [ADR 0010](adr/0010-router-timestamp-clock.md) — `CLOCK_MONOTONIC_RAW` single-host; cross-host delegated (Phase E E4) |
 | Profile templates + `deployment-profiles.md` | [Phase F F1](../robotics-ipc-module/plans/F-interoperability-bridges.md) |
 | Python / Node / MAVLink / vision peer code | [Phase F F2–F5](../robotics-ipc-module/plans/F-interoperability-bridges.md) |
 | Open considerations (TensorRT contract depth, CUDA `memory_class`, ARM CI, playback peer, declarative-transport extensions, RT pinning, cross-host time, camera shape, consumption model) | [plans/post-phases-robotics-review.md](../robotics-ipc-module/plans/post-phases-robotics-review.md) |

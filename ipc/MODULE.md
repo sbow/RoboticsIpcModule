@@ -268,7 +268,7 @@ The whole frame fits in one cache line on every supported architecture.
 | 1      | 1    | `flags`        | bit 0 has_sideband, bit 1 keyframe, bit 2 is_ack, bit 3 eos, bits 4–6 priority, bit 7 reserved |
 | 2      | 2    | `topic_id`     | publisher-set; subscribers dispatch on this |
 | 4      | 4    | `seq`          | per-source monotonic; wraps; subscriber uses modular arithmetic for gap detection |
-| 8      | 8    | `timestamp_ns` | monotonic ns, host (little-endian) byte order |
+| 8      | 8    | `timestamp_ns` | `CLOCK_MONOTONIC_RAW` ns, host (little-endian) byte order — see [ADR 0010](../docs/adr/0010-router-timestamp-clock.md); peers can stamp the same clock via [`router/timestamp.hpp`](src/router/timestamp.hpp) `router_now_ns()` |
 | 16     | 2    | `sideband_idx` | index into source peer's `[[peers.sideband]]` table; `kSidebandIdxNone = 0xFFFF` |
 | 18     | 6    | `sideband_len` | uint48 LE; cap 256 TB |
 | 24     | 8    | `sideband_seq` | slot index / sequence within the sideband region |
@@ -555,6 +555,7 @@ UDS rebind after stale socket) and a TOML loader fault path
 - [docs/adr/0007-router-idle-wake.md](../docs/adr/0007-router-idle-wake.md) — `idle_sleep_us` backoff, `eventfd` deferred to Phase F
 - [docs/adr/0008-router-frame-v2.md](../docs/adr/0008-router-frame-v2.md) — RouterFrame v2: 64 B, typed, sequenced, in-frame sideband descriptor
 - [docs/adr/0009-per-peer-ring-sizing.md](../docs/adr/0009-per-peer-ring-sizing.md) — `[[peers]] shm_slot_count` / `shm_max_payload`; right-sizes router-frame rings to one cache line
+- [docs/adr/0010-router-timestamp-clock.md](../docs/adr/0010-router-timestamp-clock.md) — router stamps `timestamp_ns` with `CLOCK_MONOTONIC_RAW` (slew-free, restart-surviving, single-host); cross-host correlation delegated to user code or future dedicated recorder; library helper `router/timestamp.hpp::router_now_ns()`
 - [ipc/SHM_SPSC_TRANSPORT.md](SHM_SPSC_TRANSPORT.md) — single-producer / single-consumer SHM transport details
 - [config/profiles/*.toml](../config/profiles/) — deployment profiles (x86_dev / jetson_prod / hil / sim_cloud)
 - [third_party/tomlplusplus/LICENSE](../third_party/tomlplusplus/LICENSE) — MIT license for vendored toml++ v3.4.0 single-header parser

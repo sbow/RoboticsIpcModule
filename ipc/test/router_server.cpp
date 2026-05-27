@@ -1,10 +1,10 @@
 #include "router_app.h"
 #include "router_client_config.h"
 #include "router/factory.hpp"
+#include "router/timestamp.hpp"
 #include "router/topology_loader.hpp"
 #include "router_protocol.hpp"
 
-#include <chrono>
 #include <cstring>
 #include <iostream>
 #include <string>
@@ -13,14 +13,8 @@
 
 namespace {
 
-using Clock = std::chrono::steady_clock;
-const Clock::time_point kStartTime = Clock::now();
-
-uint64_t ns_since_start() {
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            Clock::now() - kStartTime).count());
-}
+// Frame timestamp clock: CLOCK_MONOTONIC_RAW via router_now_ns() from
+// router/timestamp.hpp. See docs/adr/0010-router-timestamp-clock.md.
 
 void usage(const char* prog) {
     std::cerr << "usage: " << prog << " uds [router_path]\n"
@@ -59,7 +53,7 @@ void run_forward_loop(Server& server,
     server.run(
         rules,
         rule_count,
-        ns_since_start,
+        router_now_ns,
         [&](uint8_t source, uint8_t dest, const RouterFrame& frame) {
             router_log(ROUTER_LOG_INFO,
                        router_route_line(topo, source, dest, frame));
