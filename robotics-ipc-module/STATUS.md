@@ -71,6 +71,10 @@
 - [ ] F4 MAVLink gateway sketch
 - [ ] F5 Vision metadata peer sketch
 
+## Open questions / backlog
+
+- Post-phases revisit: see [plans/post-phases-robotics-review.md](plans/post-phases-robotics-review.md) — 10 considerations (TensorRT contract, CUDA `memory_class`, ARM verification, x86 playback, declarative transport, systemd readiness, RT pinning, cross-host time, camera shape, consumption model) deferred until Phases E and F close.
+
 ## Blockers
 
 _None._
