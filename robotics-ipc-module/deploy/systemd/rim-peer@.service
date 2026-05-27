@@ -1,0 +1,73 @@
+# RoboticsIpcModule peer template unit (Phase E E2 example).
+#
+# Instance name %i is the peer role: sensor, controller, recorder.
+# Real deployments substitute their own peer binaries here; the demo
+# `router_client` is the stand-in for example purposes.
+#
+# Enable instances individually:
+#   systemctl start rim-peer@sensor.service
+#   systemctl start rim-peer@controller.service
+#   systemctl start rim-peer@recorder.service
+#
+# See robotics-ipc-module/deploy/systemd/README.md for usage notes.
+
+[Unit]
+Description=RoboticsIpcModule peer (%i)
+Documentation=file:///opt/rim/docs/robotics-reference-layout.md
+
+# Peer cannot start before the router has been launched. Note: After= is
+# scheduling order, not readiness -- the router may still be binding its
+# SHM regions when this unit starts (parked review C6). Peer code is
+# expected to retry its first connect with backoff.
+After=rim-router.service
+Requires=rim-router.service
+
+# Optional: also gate on /dev/shm being available (it always is on modern
+# Linux, but doesn't hurt as documentation).
+After=local-fs.target
+
+[Service]
+Type=simple
+
+# Demo binary signature: `router_client <role> <transport> [extra args]`.
+# This example uses SHM (Jetson production profile). For UDS / UDP
+# deployments, override transport via a drop-in file or copy this
+# template into rim-peer-uds@.service with `uds` instead.
+#
+# An EnvironmentFile override lets operators tune per-instance args
+# without editing the unit. Create /etc/rim/peer-<role>.env to set
+# RIM_TRANSPORT or RIM_EXTRA_ARGS; absence is non-fatal (- prefix).
+EnvironmentFile=-/etc/rim/peer-%i.env
+Environment=RIM_TRANSPORT=shm
+Environment=RIM_EXTRA_ARGS=
+ExecStart=/opt/rim/bin/router_client %i ${RIM_TRANSPORT} ${RIM_EXTRA_ARGS}
+
+# Clean shutdown; peers don't own SHM regions (router does), so no
+# ExecStopPost cleanup is required at the peer level. CSV log files
+# at /tmp/rim_router_*.log are intentionally NOT removed -- operator
+# may want to inspect them after a crash. Use logrotate or
+# systemd-tmpfiles for retention policy.
+TimeoutStopSec=3s
+
+# If the router dies and is restarted by systemd, our SHM/UDS endpoint
+# goes invalid. Restart=on-failure with a short backoff lets us
+# reconnect once the router comes back. Peers are cheap to recycle.
+Restart=on-failure
+RestartSec=500ms
+
+# --- Production hardening (commented out -- mirror rim-router.service).
+# MemoryLock=infinity
+# CPUAffinity=3
+# LimitRTPRIO=70
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/dev/shm /tmp /run/rim
+ProtectHome=yes
+PrivateTmp=no
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

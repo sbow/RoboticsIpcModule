@@ -24,7 +24,7 @@ This is a **deployment-shape document**. It documents the contract surface (peer
 
 | Topic | Where it lives |
 |-------|----------------|
-| `sd_notify` / systemd readiness | Phase E E2 (`deploy/systemd/`) |
+| `sd_notify` / systemd readiness | Beyond Phase E2 ([deploy/systemd/](../robotics-ipc-module/deploy/systemd/) ships `Type=simple` units; readiness signaling deferred — see parked review C6) |
 | Cross-host time correlation | Phase E E4 (timestamp ADR) |
 | Python / Node / MAVLink bridge code | Phase F F2–F4 |
 | Vision peer + camera capture code | Phase F F5 |
@@ -103,8 +103,8 @@ flowchart LR
 
 | Process | Started by | Notes |
 |---------|-----------|-------|
-| `router_server --config jetson_prod.toml` | systemd (`rim-router.service`, Phase E2) | Binds + unlinks SHM regions; idle CPU ~1.5–1.7 % single core ([ADR 0007](adr/0007-router-idle-wake.md)) |
-| Sensor / controller / recorder C++ peers | systemd `rim-peer@.service` instances, `After=rim-router.service` (Phase E2) | First connect can race router bind — see [parked review C6](../robotics-ipc-module/plans/post-phases-robotics-review.md#c6--systemd-readiness-signaling-sd_notify--typenotify); user-side retry-with-backoff recommended until `sd_notify` lands |
+| `router_server --config jetson_prod.toml` | systemd ([`rim-router.service`](../robotics-ipc-module/deploy/systemd/rim-router.service)) | Binds + unlinks SHM regions; idle CPU ~1.5–1.7 % single core ([ADR 0007](adr/0007-router-idle-wake.md)) |
+| Sensor / controller / recorder C++ peers | systemd [`rim-peer@.service`](../robotics-ipc-module/deploy/systemd/rim-peer@.service) instances, `After=rim-router.service` | First connect can race router bind — see [parked review C6](../robotics-ipc-module/plans/post-phases-robotics-review.md#c6--systemd-readiness-signaling-sd_notify--typenotify); user-side retry-with-backoff recommended until `sd_notify` lands |
 | `vision_capture` (Phase F) | systemd unit | Publishes metadata frame to router; writes NV12 to `/dev/shm/rim_vision_nv12` sideband |
 | `ml_inference` (Phase F) | systemd unit | Reads `/dev/shm/rim_ml_tensor_in`, writes `/dev/shm/rim_ml_tensor_out`; CUDA / TensorRT engine is the **user's** code, not the module's |
 | `mavlink_gateway` (Phase F) | systemd unit; needs `/dev/ttyUSB*` device access | Parses MAVLink, publishes compact status to router |
@@ -239,7 +239,7 @@ The router stamps `timestamp_ns` with a process-local `steady_clock` reading on 
 
 ### Process supervision
 
-systemd unit examples land in Phase E E2 under `robotics-ipc-module/deploy/systemd/` (or `deploy/systemd/`). The intended shape is `rim-router.service` (started first, owns SHM region lifecycle) + `rim-peer@.service` instances (`After=rim-router.service`). Until E2 lands, run the demo binaries by hand using the commands in [`config/profiles/*.toml`](../config/profiles/) headers.
+systemd unit examples ship in [`robotics-ipc-module/deploy/systemd/`](../robotics-ipc-module/deploy/systemd/): [`rim-router.service`](../robotics-ipc-module/deploy/systemd/rim-router.service) (started first, owns SHM region lifecycle), [`rim-peer@.service`](../robotics-ipc-module/deploy/systemd/rim-peer@.service) (template; `%i` = `sensor` / `controller` / `recorder`; `After=`+`Requires=` the router), and [`rim-router-cleanup.sh`](../robotics-ipc-module/deploy/systemd/rim-router-cleanup.sh) (`ExecStopPost=` helper). See the [deploy/systemd/README.md](../robotics-ipc-module/deploy/systemd/README.md) for install steps, customization knobs, and known limitations.
 
 ### Idle CPU
 
@@ -264,7 +264,7 @@ The [`shm_leak_check.sh`](../robotics-ipc-module/scripts/shm_leak_check.sh) scri
 
 | Topic | Where it lands |
 |-------|----------------|
-| systemd unit files | [Phase E E2](../robotics-ipc-module/plans/E-robotics-integration.md#e2--process-supervision) |
+| systemd unit files | [robotics-ipc-module/deploy/systemd/](../robotics-ipc-module/deploy/systemd/) (Phase E E2) |
 | Bridge pointers | [Phase E E3](../robotics-ipc-module/plans/E-robotics-integration.md#e3--bridge-pointers-optional) → Phase F |
 | Timestamp ADR (`CLOCK_MONOTONIC_RAW` vs PTP) | [Phase E E4](../robotics-ipc-module/plans/E-robotics-integration.md#e4--time-sync) |
 | Profile templates + `deployment-profiles.md` | [Phase F F1](../robotics-ipc-module/plans/F-interoperability-bridges.md) |

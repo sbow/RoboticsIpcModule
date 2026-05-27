@@ -544,6 +544,7 @@ UDS rebind after stale socket) and a TOML loader fault path
 - [LESSONS-LEARNED.md](../robotics-ipc-module/LESSONS-LEARNED.md) — bugs and fixes to avoid repeating
 - [SYSTEM-VISION.md](../robotics-ipc-module/SYSTEM-VISION.md) — deployment targets and peer catalog
 - [docs/robotics-reference-layout.md](../docs/robotics-reference-layout.md) — Phase E reference layout: peer catalog, per-deployment shapes (Jetson / x86 / HIL / sim), integration patterns, forward references
+- [robotics-ipc-module/deploy/systemd/README.md](../robotics-ipc-module/deploy/systemd/README.md) — Phase E systemd unit examples: `rim-router.service`, `rim-peer@.service` template, `ExecStopPost` cleanup, install + customization + hardening notes
 - [docs/adr/0001-ipc-and-router.md](../docs/adr/0001-ipc-and-router.md) — original header-only IPC + router decision
 - [docs/adr/0002-ipc-router-refactor.md](../docs/adr/0002-ipc-router-refactor.md) — layered split (transport / link / node / app)
 - [docs/adr/0003-transport-agnostic-router.md](../docs/adr/0003-transport-agnostic-router.md) — peer-address adapters + factories

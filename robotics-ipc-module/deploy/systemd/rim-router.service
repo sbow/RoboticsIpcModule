@@ -1,0 +1,79 @@
+# RoboticsIpcModule router unit (Phase E E2 example).
+#
+# Edit the paths under [Service] for your install layout before enabling.
+# See robotics-ipc-module/deploy/systemd/README.md for installation steps,
+# customization knobs, and known limitations.
+
+[Unit]
+Description=RoboticsIpcModule router
+Documentation=file:///opt/rim/docs/robotics-reference-layout.md
+Documentation=https://github.com/sbow/RoboticsIpcModule
+
+# Bring up after the network stack so UDP / UDS profiles work; SHM-only
+# deployments don't need this but it's harmless. Adjust to After=local-fs.target
+# only if you know you'll never run a datagram profile here.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Phase E E2: Type=simple.
+#
+# Peer units that gate on us with `After=rim-router.service` will be released
+# the moment this unit's ExecStart is fork()'d, NOT when the router has
+# actually bound its SHM regions / UDS socket / UDP port. Peer code must
+# retry its first connect with backoff until sd_notify("READY=1") integration
+# lands -- see post-phases-robotics-review.md C6.
+Type=simple
+
+# Profile selects transport (SHM / UDS / UDP) + peer addresses + per-peer
+# ring sizing. Ship one TOML per deployment under /etc/rim/ and reference
+# it here. Swap profiles by editing this path or by using a drop-in.
+ExecStart=/opt/rim/bin/router_server --config /etc/rim/router.toml
+
+# Default KillMode=control-group + KillSignal=SIGTERM gives the router its
+# clean shutdown path (router_app's stop handler unwinds the forward loop
+# and closes file descriptors).
+TimeoutStopSec=5s
+
+# Cleanup runs AFTER the main process exits. The router unlinks-then-creates
+# SHM regions on every bind, so leftover /dev/shm/rim_router_* is normally
+# safe across restarts. We still rm -f here so an operator who switches
+# profiles or reboots gets a clean slate. Idempotent.
+ExecStopPost=/opt/rim/libexec/rim-router-cleanup.sh
+
+# Restart policy: come back up on crash, but back off so a wedged config
+# doesn't spin the CPU.
+Restart=on-failure
+RestartSec=1s
+
+# --- Production hardening (commented out -- see parked review C7).
+#
+# The router does NOT call mlockall / sched_setscheduler / sched_setaffinity
+# today. These systemd directives are the recommended user-side wrapping
+# for a real Jetson production deployment. Uncomment + tune as needed.
+#
+# MemoryLock=infinity        # mlock all pages; needs CAP_IPC_LOCK
+# CPUAffinity=2              # pin to an isolated core (cpuset.cpus list)
+# LimitRTPRIO=80             # allow SCHED_FIFO up to priority 80
+# Nice=-10                   # boost scheduling priority
+
+# Sandboxing (safe defaults; relax if your deployment needs more).
+NoNewPrivileges=yes
+ProtectSystem=strict
+# SHM regions live under /dev/shm; UDS sockets typically under /tmp or
+# /run/rim depending on profile. Adjust ReadWritePaths to match your
+# topology TOML's `listen` / `local` paths.
+ReadWritePaths=/dev/shm /tmp /run/rim
+ProtectHome=yes
+# PrivateTmp=no because SHM regions show up under /tmp on systems that
+# bind-mount /dev/shm there, and UDS profiles place sockets under /tmp.
+PrivateTmp=no
+
+# Journald captures stdout/stderr; the router's RouterLogFn defaults to
+# stderr in router_server.cpp (demo_stderr_logger). View with:
+#   journalctl -u rim-router.service -f
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
