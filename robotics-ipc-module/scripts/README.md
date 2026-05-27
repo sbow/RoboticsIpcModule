@@ -48,6 +48,42 @@ If a future check needs to be precise enough to live in C++ (e.g. a
 per-trip latency histogram with kernel-side `clock_gettime` deltas), it
 will graduate to a `*_test.cpp` under `ipc/test/` with an ADR.
 
+## Manual cleanup / recovery
+
+When a hung test (typically the D4 `fault_injection_test` SIGKILL
+mid-traffic scenario, or any subprocess that didn't reach
+`reap_bounded()`) leaves an orphan `router_server` alive, the normal
+`kill -9 <pid>` from inside the cursor agent's shell will fail with
+**EPERM** even though the orphan is owned by the same UID — the cursor
+sandbox installs a session / cgroup boundary that Linux's UID-level
+permission check sits *under*, and signal delivery is blocked at that
+boundary even with the harness's `required_permissions: ["all"]`.
+
+The recipe that works:
+
+```bash
+sudo pkill -KILL -f "build/ipc/test/router_server"
+rm -f /dev/shm/cpp_tricks_* /tmp/cpp_tricks_*.sock
+```
+
+Anchor `-f` on the **binary path** (`build/ipc/test/router_server`),
+not on the bare `router_server` substring — otherwise you'll also sweep
+up unrelated `cursorsandbox` host-wrapper processes whose argv tail
+contains the same string (see the `pgrep -f` lesson in
+`robotics-ipc-module/LESSONS-LEARNED.md`).
+
+Sanity-check afterwards:
+
+```bash
+pgrep -ax router_server          # should print nothing
+ls /dev/shm/cpp_tricks_* 2>&1    # should say "No such file or directory"
+ls /tmp/cpp_tricks_*.sock 2>&1   # same
+```
+
+After cleanup, `make test-leak-check` should pass with a zero baseline
+and zero delta. If it doesn't, you have a new leak somewhere — start
+by reading the post-run resource list the leak-check script prints.
+
 ## Adding a new script
 
   1. Start `set -euo pipefail` and decide on `IFS` early — if you take
