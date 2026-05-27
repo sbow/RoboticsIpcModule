@@ -98,6 +98,7 @@ ALL_TARGETS := \
 	test-datagram-seq test-routing test-resolver test-cli-args \
 	test-ipc-integration test-slow-recorder test-burst-sensor \
 	test-profile-switch test-router-restart \
+	test-soak test-leak-check test-idle-cpu test-latency-histogram \
 	ipc-echo-server ipc-echo-client ipc-echo-client-benchmark \
 	ipc-router-server ipc-router-client
 
@@ -257,6 +258,28 @@ test-router-restart: $(IPC_ROUTER_RESTART_TEST) $(IPC_ROUTER_SERVER)
 test-ipc-integration: test-slow-recorder test-burst-sensor \
 	test-profile-switch test-router-restart
 
+# Phase D3 — stress / soak scripts. These wrap the existing test
+# binaries and add timing, leak detection, and CPU regression gates.
+# Each script is self-cleaning (rm -f /dev/shm/cpp_tricks_* on exit).
+#
+#   test-soak [N=10]      loop test-router N times; abort on first fail
+#   test-leak-check       count cpp_tricks_* resources around full test pass
+#   test-idle-cpu         60s pidstat on jetson_prod router; <= 5% gate
+#   test-latency-histogram throughput variance probe (optional)
+SOAK_ITERATIONS ?= 10
+
+test-soak: $(IPC_ROUTER_TEST) $(IPC_ROUTER_SERVER) $(IPC_ROUTER_CLIENT)
+	bash robotics-ipc-module/scripts/soak_router.sh $(SOAK_ITERATIONS)
+
+test-leak-check: all
+	bash robotics-ipc-module/scripts/shm_leak_check.sh
+
+test-idle-cpu: $(IPC_ROUTER_SERVER)
+	bash robotics-ipc-module/scripts/idle_cpu_check.sh
+
+test-latency-histogram: $(IPC_ECHO_TEST)
+	bash robotics-ipc-module/scripts/latency_histogram.sh
+
 debug: CXXFLAGS += -g -O0
 debug: clean all
 
@@ -284,6 +307,10 @@ help:
 	@echo "  make test-burst-sensor   Phase D2 — SourceSeqTracker accounting under burst publish"
 	@echo "  make test-profile-switch Phase D2 — load jetson_prod + hil profiles back-to-back"
 	@echo "  make test-router-restart Phase D2 — SIGKILL router; next bind succeeds (SHM cleanup)"
+	@echo "  make test-soak           Phase D3 — loop test-router (SOAK_ITERATIONS=10 default)"
+	@echo "  make test-leak-check     Phase D3 — assert no leaked /dev/shm/ or /tmp/*.sock files"
+	@echo "  make test-idle-cpu       Phase D3 — pidstat router_server, assert <= 5% CPU"
+	@echo "  make test-latency-histogram Phase D3 — throughput variance probe (optional)"
 	@echo "  make ipc-router-server   build router server demo only"
 	@echo "  make ipc-router-client   build router client demo only"
 	@echo "  make debug               rebuild all with -g -O0"

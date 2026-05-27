@@ -286,6 +286,10 @@ make test-slow-recorder     # Phase D2 — per-peer drop attribution under slow 
 make test-burst-sensor      # Phase D2 — SourceSeqTracker accounting under burst publish
 make test-profile-switch    # Phase D2 — load jetson_prod + hil profiles back-to-back
 make test-router-restart    # Phase D2 — SIGKILL router; next bind succeeds (SHM cleanup)
+make test-soak              # Phase D3 — loop test-router (override: SOAK_ITERATIONS=N)
+make test-leak-check        # Phase D3 — assert no /dev/shm/cpp_tricks_* or /tmp/*.sock leftover after full run
+make test-idle-cpu          # Phase D3 — pidstat router_server, assert <= 5% CPU (60s default window)
+make test-latency-histogram # Phase D3 — throughput variance probe across echo_tests runs (optional)
 make debug                  # rebuild with -g -O0
 make clean
 ```
@@ -328,6 +332,25 @@ ring's footprint from `2 × 256 × 1028 ≈ 526 KiB` (legacy default) to
 ring inside L1/L2 cache. Sideband regions (under
 `[[peers.sideband]]`) have independent sizing and continue to carry
 bulk data. See `jetson_prod.toml` for the recommended SHM profile.
+
+### Stress / soak scripts (Phase D3)
+
+`robotics-ipc-module/scripts/` holds four shell wrappers that drive the
+existing test binaries for soak, leak detection, and CPU regression.
+They are wired into the Makefile so CI / babysitting hooks can call
+them by phony target name:
+
+| Script | Make target | Purpose |
+|---|---|---|
+| `soak_router.sh [N=10]` | `make test-soak [SOAK_ITERATIONS=N]` | Loop `router_test` N times; abort on first non-zero exit; print per-iteration timing and a final mean / min / max summary. Cleans `/dev/shm/cpp_tricks_*` + `/tmp/cpp_tricks_*.sock` between iterations so a flake can't cascade |
+| `shm_leak_check.sh` | `make test-leak-check` | Count `cpp_tricks_*` resources under `/dev/shm/` and `/tmp/*.sock` before and after `make test-ipc-unit && make test-ipc-integration && make test-router`; assert delta == 0. Set `LEAK_CHECK_SKIP_ROUTER=1` on hosts where AF_INET is sandboxed |
+| `idle_cpu_check.sh` | `make test-idle-cpu` | Boot `router_server --config jetson_prod.toml`, wait for SHM bind, sample CPU via `pidstat -u -p $PID INTERVAL SAMPLES`, assert avg `%CPU` ≤ 5 % (defaults: 6 × 10 s = 60 s window). Knobs: `IDLE_CPU_SAMPLES`, `IDLE_CPU_INTERVAL`, `IDLE_CPU_THRESHOLD`. Regression gate for [ADR 0007](../docs/adr/0007-router-idle-wake.md) — the pre-fix baseline was 100 % of one core |
+| `latency_histogram.sh [N=5]` | `make test-latency-histogram` | (Optional) Re-run `echo_tests` N times, print min / p25 / p50 / p75 / max / max-over-min for throughput per transport. Variance probe, not per-trip latency — per-trip would require a benchmark flag (deferred to Phase E) |
+
+All four scripts emit colour only on a TTY, exit non-zero on the first
+failure they detect, and clean their own SHM / UDS leftovers via `trap`
+so they're safe to chain in `make` or CI without leaving the host in a
+worse state than they found it.
 
 ### Known limitations (deferred)
 
