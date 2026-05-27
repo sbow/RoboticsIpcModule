@@ -29,7 +29,7 @@ You are implementing a **phased roadmap** for a Linux robotics **message fabric*
 
 - Same `RouteRule[]` and peer **IDs** across `config/profiles/*.yaml`
 - Change `PeerAddress` + default `TransportKind` per profile
-- Do not hardcode `/tmp/cpp_tricks_*` in library code
+- Do not hardcode `/tmp/rim_*` (or any concrete socket / SHM path) in library code under `ipc/src/`
 
 ## Default verify
 

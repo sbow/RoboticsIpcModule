@@ -58,7 +58,7 @@ Document mapping in `docs/deployment-profiles.md`.
 
 ## Review checklist
 
-- [ ] No `Python.h`, `node.h`, or `mavlink.h` in `cpp_tricks/ipc/src/`
+- [ ] No `Python.h`, `node.h`, or `mavlink.h` in `ipc/src/`
 - [ ] Profiles validate with topology loader (Phase B)
 - [ ] One manual demo: router + python_peer OR node_gateway on x86
 

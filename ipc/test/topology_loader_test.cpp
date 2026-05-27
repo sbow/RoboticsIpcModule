@@ -79,22 +79,22 @@ void expect_load_error(std::string_view toml, const char* substr) {
 
 constexpr const char* kValidUds = R"(
 [router]
-listen = "uds:/tmp/cpp_tricks_router.sock"
+listen = "uds:/tmp/rim_router.sock"
 
 [[peers]]
 id    = 1
 name  = "sensor"
-local = "uds:/tmp/cpp_tricks_router_a.sock"
+local = "uds:/tmp/rim_router_a.sock"
 
 [[peers]]
 id    = 2
 name  = "controller"
-local = "uds:/tmp/cpp_tricks_router_b.sock"
+local = "uds:/tmp/rim_router_b.sock"
 
 [[peers]]
 id    = 3
 name  = "recorder"
-local = "uds:/tmp/cpp_tricks_router_c.sock"
+local = "uds:/tmp/rim_router_c.sock"
 
 [[routes]]
 source = 1
@@ -165,7 +165,7 @@ void test_valid_uds() {
     EXPECT_EQ(view.peer_count, static_cast<std::size_t>(3));
     EXPECT(view.router_listen.kind == PeerAddressKind::UdsPath);
     EXPECT_STREQ(view.router_listen.u.uds_path,
-                 "/tmp/cpp_tricks_router.sock");
+                 "/tmp/rim_router.sock");
 
     const PeerEntry* sensor = peer_by_id(view, 1);
     EXPECT(sensor != nullptr);
@@ -173,7 +173,7 @@ void test_valid_uds() {
         EXPECT_STREQ(sensor->name, "sensor");
         EXPECT(sensor->local.kind == PeerAddressKind::UdsPath);
         EXPECT_STREQ(sensor->local.u.uds_path,
-                     "/tmp/cpp_tricks_router_a.sock");
+                     "/tmp/rim_router_a.sock");
     }
 
     EXPECT_EQ(topo.route_count(), static_cast<std::size_t>(2));

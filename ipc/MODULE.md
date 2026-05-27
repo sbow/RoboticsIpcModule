@@ -18,6 +18,33 @@ for the layering rules every change is reviewed against.
 
 Cross-machine deployments use the **UDP profile** — SHM does not span hosts.
 
+## Resource-name convention (`rim_*`)
+
+Every runtime identifier this module owns — `/dev/shm` segment names, `/tmp` or
+`/run/robot/` UDS socket paths, log files, systemd unit names, future
+environment-variable prefixes — uses **`rim`** as the namespace token
+(`RoboticsIpcModule`). Concrete examples shipped today:
+
+| Resource | Today's path |
+|----------|------|
+| SHM router listen label | `/dev/shm/rim_router` |
+| SHM per-peer rings | `/dev/shm/rim_router_sensor`, `..._controller`, `..._recorder` |
+| UDS router socket | `/tmp/rim_router.sock` (dev) or `/run/robot/rim_router.sock` (prod, Phase E) |
+| UDS per-peer sockets | `/tmp/rim_router_{a,b,c}.sock` |
+| Demo log files | `/tmp/rim_router_b.log`, `/tmp/rim_router_c.log` |
+| Test-private SHM | `/dev/shm/rim_<test_name>_*` (each test owns its namespace) |
+
+Pre-rename baseline used `cpp_tricks_*` paths (carried over from the vendored
+predecessor repo, [`sbow/cpp_tricks`](https://github.com/sbow/cpp_tricks)).
+The rename to `rim_*` landed as a dedicated commit before Phase E so the
+module no longer carries a dead-repo identifier — see the "Resource-name note"
+in [ADR 0004](../docs/adr/0004-robotics-module-boundaries.md) for the
+rationale and the "rim namespace" lesson in
+[`robotics-ipc-module/LESSONS-LEARNED.md`](../robotics-ipc-module/LESSONS-LEARNED.md).
+ADRs 0001–0003 still show the old prefix in their frozen scope listings;
+mentally translate `cpp_tricks_*` → `rim_*` for any path you intend to use
+today.
+
 ## Toolchain
 
 - **Standard:** C++20 (concepts, `if constexpr`, `std::string_view`)
@@ -215,7 +242,7 @@ module API:
 |------|----------|
 | `ipc/src/ipc/*.hpp`, `ipc/src/router/*.hpp`, `ipc/src/ipc.{h,hpp}`, `ipc/src/router_protocol.{h,hpp}`, `ipc/src/router_app.h` | **Public library** (header-only, stable) |
 | `ipc/test/echo_*.cpp`, `ipc/test/router_*.cpp` | **Examples**; copy patterns, don't link against |
-| `ipc/test/router_client_config.h` | **Demo wiring only** (hard-codes `/tmp/cpp_tricks_*` paths, demo peer IDs, demo route rules). **Apps MUST NOT include this header.** Phase B will replace it with topology YAML. |
+| `ipc/test/router_client_config.h` | **Demo wiring only** (hard-codes `/tmp/rim_*` paths, demo peer IDs, demo route rules). **Apps MUST NOT include this header.** Phase B will replace it with topology YAML. |
 
 The library/example boundary is enforced by inspection (review checklist
 in [plans/A-module-packaging.md](../robotics-ipc-module/plans/A-module-packaging.md)).
@@ -292,8 +319,8 @@ Contract summary:
    (SHM) so the stop flag is observed within one poll tick — never block
    signal handling on an infinite spin.
 4. **SIGKILL** is unsupported for clean shutdown: it skips destructors, leaving
-   stale UDS sockets at `/tmp/cpp_tricks_router_*.sock` and (currently) SHM
-   regions at `/dev/shm/cpp_tricks_*`. Tests `unlink` and `shm_unlink` on every
+   stale UDS sockets at `/tmp/rim_router_*.sock` and (currently) SHM
+   regions at `/dev/shm/rim_*`. Tests `unlink` and `shm_unlink` on every
    scenario start to recover.
 
 ## Resource cleanup
@@ -327,7 +354,7 @@ make test-profile-switch    # Phase D2 — load jetson_prod + hil profiles back-
 make test-router-restart    # Phase D2 — SIGKILL router; next bind succeeds (SHM cleanup)
 make test-fault-injection   # Phase D4 — truncated UDP / unknown source / wrong UDS path / SIGKILL mid-traffic / TOML reject
 make test-soak              # Phase D3 — loop test-router (override: SOAK_ITERATIONS=N)
-make test-leak-check        # Phase D3 — assert no /dev/shm/cpp_tricks_* or /tmp/*.sock leftover after full run
+make test-leak-check        # Phase D3 — assert no /dev/shm/rim_* or /tmp/*.sock leftover after full run
 make test-idle-cpu          # Phase D3 — pidstat router_server, assert <= 5% CPU (60s default window)
 make test-latency-histogram # Phase D3 — throughput variance probe across echo_tests runs (optional)
 make ci                     # Phase D — exact stage list the GitHub Actions PR gate runs (build + unit + integration + router + leak-check, serialized)
@@ -361,7 +388,7 @@ SHM rings:
 [[peers]]
 id              = 1
 name            = "sensor"
-local           = "shm:/cpp_tricks_router_sensor"
+local           = "shm:/rim_router_sensor"
 shm_slot_count  = 256       # optional; default = ShmSpsc::BindParams (256)
 shm_max_payload = 64        # optional; default = ShmSpsc::BindParams (1024)
                             # must be >= kRouterFrameSize (64), <= 256 MiB
@@ -383,8 +410,8 @@ them by phony target name:
 
 | Script | Make target | Purpose |
 |---|---|---|
-| `soak_router.sh [N=10]` | `make test-soak [SOAK_ITERATIONS=N]` | Loop `router_test` N times; abort on first non-zero exit; print per-iteration timing and a final mean / min / max summary. Cleans `/dev/shm/cpp_tricks_*` + `/tmp/cpp_tricks_*.sock` between iterations so a flake can't cascade |
-| `shm_leak_check.sh` | `make test-leak-check` | Count `cpp_tricks_*` resources under `/dev/shm/` and `/tmp/*.sock` before and after `make test-ipc-unit && make test-ipc-integration && make test-router`; assert delta == 0. Set `LEAK_CHECK_SKIP_ROUTER=1` on hosts where AF_INET is sandboxed |
+| `soak_router.sh [N=10]` | `make test-soak [SOAK_ITERATIONS=N]` | Loop `router_test` N times; abort on first non-zero exit; print per-iteration timing and a final mean / min / max summary. Cleans `/dev/shm/rim_*` + `/tmp/rim_*.sock` between iterations so a flake can't cascade |
+| `shm_leak_check.sh` | `make test-leak-check` | Count `rim_*` resources under `/dev/shm/` and `/tmp/*.sock` before and after `make test-ipc-unit && make test-ipc-integration && make test-router`; assert delta == 0. Set `LEAK_CHECK_SKIP_ROUTER=1` on hosts where AF_INET is sandboxed |
 | `idle_cpu_check.sh` | `make test-idle-cpu` | Boot `router_server --config jetson_prod.toml`, wait for SHM bind, sample CPU via `pidstat -u -p $PID INTERVAL SAMPLES`, assert avg `%CPU` ≤ 5 % (defaults: 6 × 10 s = 60 s window). Knobs: `IDLE_CPU_SAMPLES`, `IDLE_CPU_INTERVAL`, `IDLE_CPU_THRESHOLD`. Regression gate for [ADR 0007](../docs/adr/0007-router-idle-wake.md) — the pre-fix baseline was 100 % of one core |
 | `latency_histogram.sh [N=5]` | `make test-latency-histogram` | (Optional) Re-run `echo_tests` N times, print min / p25 / p50 / p75 / max / max-over-min for throughput per transport. Variance probe, not per-trip latency — per-trip would require a benchmark flag (deferred to Phase E) |
 
@@ -420,7 +447,7 @@ runs on the same ref so fast pushes don't pile up runner minutes.
 `make ci` is the local mirror — exact same stages, dispatched as
 sequenced sub-makes so a `-jN` parent doesn't fan out the test
 invocations themselves (some Phase D scenarios bind well-known
-`/dev/shm/cpp_tricks_router_*` paths and would race for the same names
+`/dev/shm/rim_router_*` paths and would race for the same names
 under parallel execution). Use it before pushing to predict the gate
 without burning a runner.
 
@@ -438,7 +465,7 @@ variance calls for it.
 | Client→router SHM publish blocks | `ShmRouterLink::send_to_router` still calls blocking `shm_push_slot`; if the router crashes or stops with a full client req ring, the client hangs until killed | Future ADR — symmetric `try_send_to_router` returning `ShmSendResult` (requires API change to client publish path) |
 | 32 B v2 `RouterFrame` payload | Inline scratchpad sized for control plane only | Use sideband for bulk: v2 frame carries `(sideband_idx, sideband_seq, sideband_len)` directly (ADR 0008); ADR 0005 describes naming + lifecycle |
 | `[[peers.sideband]]` has no `memory_class` field | Topology loader parses name + `max_payload_bytes` only; subscribers infer CPU/CUDA/NvBufSurface out-of-band | Forward-declared in ADR 0008, parsed in Phase F vision/ML bridge work |
-| Hardcoded `/tmp/cpp_tricks_*` paths in demos | `ipc/test/router_client_config.h` | Phase B done — TOML profiles in `config/profiles/*.toml`; demos still link the legacy header for the route table |
+| Hardcoded `/tmp/rim_*` paths in demos | `ipc/test/router_client_config.h` | Phase B done — TOML profiles in `config/profiles/*.toml`; demos still link the legacy header for the route table |
 | No `eventfd`-based wake on SHM | `try_recv` + 1 ms `sleep_for` (Phase C2) — idle CPU ~1.6% of one core | Phase F: `eventfd` per peer ring (see [ADR 0007](../docs/adr/0007-router-idle-wake.md)) |
 | `dropped_full` does not identify the slow peer | Single global counter on the link | Phase D2a — extend `ShmRouterMetrics` with `dropped_full_per_peer`; required to validate the "Slow recorder" integration scenario |
 | Default `shm_max_payload = 1024` is ~15× larger than RouterFrame v2 (64 B) | **Resolved (D0 / ADR 0009)** — `[[peers]] shm_slot_count` / `shm_max_payload` are now optional TOML overrides on SHM peers; `jetson_prod.toml` ships with `256 × 64` per peer; compile-time topologies still use ShmSpsc defaults (sentinel zero in `PeerEntry`) so the demo path is unchanged | — |

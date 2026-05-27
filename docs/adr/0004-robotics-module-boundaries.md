@@ -6,6 +6,8 @@
 - **Scope:** Module boundary, public surface, wire-format versioning, and bridge/interop exclusion for the `ipc/` library that ships out of this repo.
 
 > Path note: ADRs 0001–0003 were authored against the `cpp_tricks/ipc/...` source tree and reference paths in that layout. This module was vendored from `sbow/cpp_tricks` and re-rooted at `ipc/` (see [CONTEXT.md](../../robotics-ipc-module/CONTEXT.md) and [STATUS.md](../../robotics-ipc-module/STATUS.md)). The architectural decisions in 0001–0003 carry over unchanged; only directory paths are different. New ADRs (this one onward) use the new layout.
+>
+> Resource-name note (Phase E preamble): runtime resources (SHM segments, UDS sockets, systemd units, environment-variable prefixes) used a `cpp_tricks_*` namespace at baseline, carried over from the vendored repo. They were renamed to `rim_*` ("RoboticsIpcModule") in a dedicated commit immediately before Phase E so the module no longer carries a dead-repo identifier. ADRs 0001–0003 still show `cpp_tricks_*` resource names in their listings; mentally translate to `rim_*` for any command you intend to run today. ADRs 0005 onward use the new prefix natively. See `LESSONS-LEARNED.md` ("rim namespace") for the rationale and the `sbow/cpp_tricks` origin attribution.
 
 ## Context
 

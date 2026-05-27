@@ -12,9 +12,9 @@ namespace {
 
 constexpr uint16_t kDefaultUdpPort = 19000;
 constexpr const char* kDefaultUdpHost = "127.0.0.1";
-constexpr const char* kDefaultUdsServerPath = "/tmp/cpp_tricks_echo_server.sock";
-constexpr const char* kDefaultUdsClientPath = "/tmp/cpp_tricks_echo_client.sock";
-constexpr const char* kDefaultShmName = "/cpp_tricks_shm_echo";
+constexpr const char* kDefaultUdsServerPath = "/tmp/rim_echo_server.sock";
+constexpr const char* kDefaultUdsClientPath = "/tmp/rim_echo_client.sock";
+constexpr const char* kDefaultShmName = "/rim_shm_echo";
 constexpr int kDefaultDurationSec = 5;
 constexpr int kRecvTimeoutMs = 200;
 

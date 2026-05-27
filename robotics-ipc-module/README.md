@@ -8,11 +8,22 @@ Evolve a **header-only Linux IPC/router** into the C++ **message fabric** for a 
 |-----|---------|
 | [AGENTS.md](AGENTS.md) | Session entry contract |
 | [DESIGN-PRINCIPLES.md](DESIGN-PRINCIPLES.md) | **Must-read** rules for all phases |
-| [LESSONS-LEARNED.md](LESSONS-LEARNED.md) | Bugs and fixes from cpp_tricks development |
+| [LESSONS-LEARNED.md](LESSONS-LEARNED.md) | Bugs and fixes from the IPC/router lineage (cpp_tricks → RoboticsIpcModule) |
 | [SYSTEM-VISION.md](SYSTEM-VISION.md) | North star: peers, profiles, bridges |
 | [CONTEXT.md](CONTEXT.md) | Current code baseline |
 | [STATUS.md](STATUS.md) | Progress tracker |
 | [plans/00-MASTER.md](plans/00-MASTER.md) | Phases A–F |
+
+## Naming convention
+
+- **Module name (long form):** `RoboticsIpcModule` — used in prose, repo URL, and the heading of every doc.
+- **Resource prefix (short form):** `rim` — used in every runtime identifier this module owns:
+  - SHM regions under `/dev/shm/` → `/dev/shm/rim_router_sensor`, `/dev/shm/rim_router_controller`, etc.
+  - UDS sockets → `/tmp/rim_router.sock` (x86 dev) or `/run/robot/rim_router.sock` (production).
+  - Log files → `/tmp/rim_router.log`, `/tmp/rim_router_c.log` (recorder).
+  - systemd units → `rim-router.service`, `rim-peer@.service` (Phase E onward).
+  - Test-private namespaces → `rim_burst_sensor_*`, `rim_slow_recorder_*`, `rim_fault_*`, etc.
+- **Origin note:** the `ipc/` tree was vendored from [`sbow/cpp_tricks`](https://github.com/sbow/cpp_tricks) at Phase A baseline (`243ede0`). Runtime resources originally carried the `cpp_tricks_*` prefix; they were renamed to `rim_*` in a dedicated commit immediately before Phase E so the module stops carrying a dead-repo identifier (see [LESSONS-LEARNED.md](LESSONS-LEARNED.md) and [docs/adr/0004-robotics-module-boundaries.md](../docs/adr/0004-robotics-module-boundaries.md) "Resource-name note").
 
 ## Quick start
 

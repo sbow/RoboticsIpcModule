@@ -347,7 +347,7 @@ void test_wrong_uds_path_throws_at_bind() {
     static constexpr const char* kBadPath = "/nonexistent_dir_xyzzy/router.sock";
 
     static constexpr PeerEntry kPeers[] = {
-        {1, "a", peer_uds("/tmp/cpp_tricks_fault_a.sock"), 0, 0},
+        {1, "a", peer_uds("/tmp/rim_fault_a.sock"), 0, 0},
     };
     static const RouterTopology kTopo = {
         .peers         = kPeers,
@@ -386,11 +386,11 @@ void test_wrong_uds_path_throws_at_bind() {
 // ----------------------------------------------------------------------
 
 void test_uds_rebind_after_stale_path_succeeds() {
-    static constexpr const char* kPath = "/tmp/cpp_tricks_fault_rebind.sock";
+    static constexpr const char* kPath = "/tmp/rim_fault_rebind.sock";
     ::unlink(kPath);
 
     static constexpr PeerEntry kPeers[] = {
-        {1, "a", peer_uds("/tmp/cpp_tricks_fault_unused.sock"), 0, 0},
+        {1, "a", peer_uds("/tmp/rim_fault_unused.sock"), 0, 0},
     };
     static const RouterTopology kTopo = {
         .peers         = kPeers,
@@ -439,11 +439,11 @@ void test_uds_rebind_after_stale_path_succeeds() {
 void test_topology_loader_rejects_undersize_shm_payload() {
     constexpr const char* kBadToml = R"(
 [router]
-listen = "shm:/cpp_tricks_fault_router"
+listen = "shm:/rim_fault_router"
 [[peers]]
 id              = 1
 name            = "sensor"
-local           = "shm:/cpp_tricks_fault_sensor"
+local           = "shm:/rim_fault_sensor"
 shm_max_payload = 32
 )";
 
@@ -473,10 +473,10 @@ constexpr const char* kRouterServerBin = "build/ipc/test/router_server";
 constexpr const char* kJetsonProfile   = "config/profiles/jetson_prod.toml";
 
 const char* const kShmNames[] = {
-    "/cpp_tricks_router",
-    "/cpp_tricks_router_sensor",
-    "/cpp_tricks_router_controller",
-    "/cpp_tricks_router_recorder",
+    "/rim_router",
+    "/rim_router_sensor",
+    "/rim_router_controller",
+    "/rim_router_recorder",
 };
 
 void shm_unlink_all() {
@@ -524,7 +524,7 @@ bool wait_for_router_bind(int deadline_ms) {
     const auto deadline = std::chrono::steady_clock::now()
         + std::chrono::milliseconds(deadline_ms);
     while (std::chrono::steady_clock::now() < deadline) {
-        if (shm_exists("/cpp_tricks_router_sensor")) {
+        if (shm_exists("/rim_router_sensor")) {
             return true;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -572,7 +572,7 @@ void test_sigkill_router_mid_traffic_recoverable() {
     // into the live router so the SIGKILL actually catches it servicing
     // traffic, not idling.
     static constexpr PeerEntry kSensorPeer[] = {
-        {kSensorId, "sensor", peer_shm("/cpp_tricks_router_sensor"),
+        {kSensorId, "sensor", peer_shm("/rim_router_sensor"),
          256u, 64u},
     };
 
@@ -619,11 +619,11 @@ void test_sigkill_router_mid_traffic_recoverable() {
     EXPECT(reap_bounded(pid1, 1000));
 
     // SIGKILL bypasses destructors — the per-peer SHM regions linger.
-    // (`/cpp_tricks_router` itself is a topology label, not a created
+    // (`/rim_router` itself is a topology label, not a created
     // region; per-peer rings are what we recover on the next bind.)
-    EXPECT(shm_exists("/cpp_tricks_router_sensor"));
-    EXPECT(shm_exists("/cpp_tricks_router_controller"));
-    EXPECT(shm_exists("/cpp_tricks_router_recorder"));
+    EXPECT(shm_exists("/rim_router_sensor"));
+    EXPECT(shm_exists("/rim_router_controller"));
+    EXPECT(shm_exists("/rim_router_recorder"));
 
     // ----- Round 2: fresh spawn must bind cleanly ---------------------
     const pid_t pid2 = spawn_router();

@@ -11,22 +11,22 @@
 #      ipc/src/router/topology_loader.hpp (schema).
 
 [router]
-listen = "uds:/tmp/cpp_tricks_router.sock"
+listen = "uds:/tmp/rim_router.sock"
 
 [[peers]]
 id    = 1
 name  = "sensor"
-local = "uds:/tmp/cpp_tricks_router_a.sock"
+local = "uds:/tmp/rim_router_a.sock"
 
 [[peers]]
 id    = 2
 name  = "controller"
-local = "uds:/tmp/cpp_tricks_router_b.sock"
+local = "uds:/tmp/rim_router_b.sock"
 
 [[peers]]
 id    = 3
 name  = "recorder"
-local = "uds:/tmp/cpp_tricks_router_c.sock"
+local = "uds:/tmp/rim_router_c.sock"
 
 [[routes]]
 source = 1     # sensor → controller (primary), recorder (tap)

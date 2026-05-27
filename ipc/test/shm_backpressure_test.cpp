@@ -42,9 +42,9 @@ int assertions_failed = 0;
     }                                                                      \
 } while (0)
 
-constexpr const char* kRouterListenName = "/cpp_tricks_router_bp_test";
-constexpr const char* kPeerAShm = "/cpp_tricks_router_bp_test_A";
-constexpr const char* kPeerBShm = "/cpp_tricks_router_bp_test_B";
+constexpr const char* kRouterListenName = "/rim_router_bp_test";
+constexpr const char* kPeerAShm = "/rim_router_bp_test_A";
+constexpr const char* kPeerBShm = "/rim_router_bp_test_B";
 
 constexpr PeerEntry kPeers[] = {
     {1, "A", peer_shm(kPeerAShm)},
@@ -232,7 +232,7 @@ void test_full_ring_drops_and_no_spin() {
 // destination only. This is exactly the shape of the D2 slow-recorder
 // integration scenario, but exercised at the link level without a real
 // subscriber loop.
-constexpr const char* kPeerCShm = "/cpp_tricks_router_bp_test_C";
+constexpr const char* kPeerCShm = "/rim_router_bp_test_C";
 
 constexpr PeerEntry kPeers3[] = {
     {1, "A", peer_shm(kPeerAShm)},

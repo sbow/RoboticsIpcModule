@@ -36,7 +36,7 @@ coverage/
 .coverage
 
 # UDS sockets and SHM scratch (router demos)
-/tmp/cpp_tricks_*
+/tmp/rim_*
 
 # Editor / OS
 .DS_Store

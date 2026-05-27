@@ -11,8 +11,8 @@
 namespace {
 
 constexpr uint16_t kDefaultUdpPort = 19000;
-constexpr const char* kDefaultUdsPath = "/tmp/cpp_tricks_echo_server.sock";
-constexpr const char* kDefaultShmName = "/cpp_tricks_shm_echo";
+constexpr const char* kDefaultUdsPath = "/tmp/rim_echo_server.sock";
+constexpr const char* kDefaultShmName = "/rim_shm_echo";
 constexpr int kPollRecvTimeoutMs = 200;
 
 void usage(const char* prog) {

@@ -40,7 +40,7 @@ ADR section: replace router-relative ns with `CLOCK_MONOTONIC` raw or PTP offset
 ## Review checklist
 
 - [ ] Fresh install: systemd units start router + 3 clients on bench hardware
-- [ ] Shutdown leaves no stale `/dev/shm/cpp_tricks_*` after clean stop
+- [ ] Shutdown leaves no stale `/dev/shm/rim_*` after clean stop
 - [ ] MODULE.md links reference layout
 
 ## Acceptance

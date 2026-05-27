@@ -23,19 +23,19 @@
 #      SYSTEM-VISION.md.
 
 [router]
-listen = "shm:/cpp_tricks_router"
+listen = "shm:/rim_router"
 
 [[peers]]
 id              = 1
 name            = "sensor"
-local           = "shm:/cpp_tricks_router_sensor"
+local           = "shm:/rim_router_sensor"
 shm_slot_count  = 256
 shm_max_payload = 64                 # ADR 0009 — one RouterFrame v2 per slot
 
 [[peers]]
 id              = 2
 name            = "controller"
-local           = "shm:/cpp_tricks_router_controller"
+local           = "shm:/rim_router_controller"
 shm_slot_count  = 256
 shm_max_payload = 64
 
@@ -57,7 +57,7 @@ shm_max_payload = 64
 [[peers]]
 id              = 3
 name            = "recorder"
-local           = "shm:/cpp_tricks_router_recorder"
+local           = "shm:/rim_router_recorder"
 shm_slot_count  = 256
 shm_max_payload = 64
 

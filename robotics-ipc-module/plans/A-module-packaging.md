@@ -17,7 +17,7 @@ Draw a clear **library vs example** boundary so the IPC/router can ship as a mod
 
 ### A1 — `MODULE.md`
 
-Create `${IPC_ROOT}/MODULE.md` (default `cpp_tricks/ipc/MODULE.md`) containing:
+Create `${IPC_ROOT}/MODULE.md` (default `ipc/MODULE.md`) containing:
 
 - Supported platforms (Linux, glibc, `-lrt` for SHM)
 - Minimum compiler (C++20)
@@ -71,7 +71,7 @@ Create `docs/adr/0004-robotics-module-boundaries.md`:
 make all
 make test-ipc
 make test-router
-test -f cpp_tricks/ipc/MODULE.md
+test -f ipc/MODULE.md
 test -f docs/adr/0004-robotics-module-boundaries.md
 ```
 

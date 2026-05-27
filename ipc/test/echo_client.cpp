@@ -9,8 +9,8 @@ namespace {
 
 constexpr uint16_t kDefaultUdpPort = 19000;
 constexpr const char* kDefaultUdpHost = "127.0.0.1";
-constexpr const char* kDefaultUdsServerPath = "/tmp/cpp_tricks_echo_server.sock";
-constexpr const char* kDefaultUdsClientPath = "/tmp/cpp_tricks_echo_client.sock";
+constexpr const char* kDefaultUdsServerPath = "/tmp/rim_echo_server.sock";
+constexpr const char* kDefaultUdsClientPath = "/tmp/rim_echo_client.sock";
 constexpr int kDefaultRoundTrips = 1;
 constexpr const char* kMessage = "ping";
 

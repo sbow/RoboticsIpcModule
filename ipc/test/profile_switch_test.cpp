@@ -74,10 +74,10 @@ constexpr uint8_t kRecorderId   = 3;
 // left behind. Hardcodes the names jetson_prod.toml uses; safe to call
 // even if nothing exists.
 void cleanup_jetson_shm() {
-    ::shm_unlink("/cpp_tricks_router");
-    ::shm_unlink("/cpp_tricks_router_sensor");
-    ::shm_unlink("/cpp_tricks_router_controller");
-    ::shm_unlink("/cpp_tricks_router_recorder");
+    ::shm_unlink("/rim_router");
+    ::shm_unlink("/rim_router_sensor");
+    ::shm_unlink("/rim_router_controller");
+    ::shm_unlink("/rim_router_recorder");
 }
 
 // ----- SHM (jetson_prod.toml) round ------------------------------------

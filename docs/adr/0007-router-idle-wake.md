@@ -45,7 +45,7 @@ process *doing nothing*.
 The Phase C plan requires "idle router + clients: CPU < 5% one core for
 60 s". The yield-only path fails this requirement by a factor of 20.
 
-`cpp_tricks/ipc/SHM_SPSC_TRANSPORT.md` Phase 2 describes the eventfd-based
+`ipc/SHM_SPSC_TRANSPORT.md` Phase 2 describes the eventfd-based
 wake we ultimately want: producer signals after publish, consumer arms a
 wait when the ring is empty, drains on wake. That is a non-trivial
 implementation (signaling protocol, lost-wake races, eventfd lifetime
@@ -196,7 +196,7 @@ trade-offs.
 
 ```bash
 # Re-measure with default idle_sleep_us=1000 (no traffic, 60 s):
-rm -f /dev/shm/cpp_tricks_router*
+rm -f /dev/shm/rim_router*
 ./build/ipc/test/router_server --config config/profiles/jetson_prod.toml &
 ROUTER_PID=$!
 pidstat -p $ROUTER_PID 10 6   # expect %CPU well under 5

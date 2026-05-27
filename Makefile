@@ -282,7 +282,7 @@ test-ipc-unit: build-ipc-unit
 # Phase D2 — integration scenarios (no fork: slow_recorder, burst_sensor,
 # profile_switch; subprocess fork: router_restart, fault_injection).
 # These must run one at a time: profile_switch_test, router_restart_test
-# and fault_injection_test all bind /cpp_tricks_router_* SHM regions via
+# and fault_injection_test all bind /rim_router_* SHM regions via
 # jetson_prod.toml and would race for the same names under -jN.
 test-slow-recorder: $(IPC_SLOW_RECORDER_TEST)
 	./$(IPC_SLOW_RECORDER_TEST)
@@ -308,10 +308,10 @@ test-ipc-integration: build-ipc-integration
 
 # Phase D3 — stress / soak scripts. These wrap the existing test
 # binaries and add timing, leak detection, and CPU regression gates.
-# Each script is self-cleaning (rm -f /dev/shm/cpp_tricks_* on exit).
+# Each script is self-cleaning (rm -f /dev/shm/rim_* on exit).
 #
 #   test-soak [N=10]      loop test-router N times; abort on first fail
-#   test-leak-check       count cpp_tricks_* resources around full test pass
+#   test-leak-check       count rim_* resources around full test pass
 #   test-idle-cpu         60s pidstat on jetson_prod router; <= 5% gate
 #   test-latency-histogram throughput variance probe (optional)
 SOAK_ITERATIONS ?= 10

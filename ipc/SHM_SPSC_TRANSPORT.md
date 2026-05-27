@@ -62,7 +62,7 @@ Prefer (1) or a thin `ShmEndpoint` with same method names as `Client`/`Server`.
 
 ```cpp
 struct BindParams {
-    const char* name;       // e.g. "/cpp_tricks_shm_echo"
+    const char* name;       // e.g. "/rim_shm_echo"
     size_t slot_count;    // power of 2
     size_t max_payload;   // e.g. 256
 };
@@ -152,7 +152,7 @@ Reference: Linux futex `FUTEX_WAIT` / `FUTEX_WAKE` on a word in the same SHM reg
 - **Pattern:** DPDK `rte_ring` (spin, C), hand-rolled HFT rings + futex (C)
 - **Productized C++:** Eclipse iceoryx (SHM pub/sub, zero-copy) — study, don’t depend on for v1
 - **Building blocks:** `shm_open`, `memfd_create`, `mmap`, C++ atomics, `eventfd(2)`
-- **Prior art in repo:** `Udp`, `Uds` in `ipc.h`; echo tests in `cpp_tricks/ipc/test/`
+- **Prior art in repo:** `Udp`, `Uds` in `ipc.h`; echo tests in `ipc/test/` (vendored from `sbow/cpp_tricks/ipc/test/`)
 
 ## Implementation checklist
 

@@ -89,4 +89,4 @@ Full list: [DESIGN-PRINCIPLES.md](../DESIGN-PRINCIPLES.md).
 | Determinism | Idle CPU ≤ 5% on Jetson? (Phase C: measured 1.6%) |
 | Interop | Bridge code only under `examples/bridges/`? |
 | Vision | Camera / ML use sideband (referenced by v2 frame's `sideband_idx` / `sideband_seq` / `sideband_len`), not the 32 B inline payload? |
-| Ops | SIGKILL cleanup documented? `/dev/shm/cpp_tricks_*` and `/tmp/cpp_tricks_*.sock` reclaimed? |
+| Ops | SIGKILL cleanup documented? `/dev/shm/rim_*` and `/tmp/rim_*.sock` reclaimed? |

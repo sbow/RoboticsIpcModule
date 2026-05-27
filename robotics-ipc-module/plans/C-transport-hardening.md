@@ -8,7 +8,7 @@
 
 Bounded SHM behavior for **Jetson** workloads (vision-adjacent throughput), measurable metrics, near-zero idle CPU on battery-powered compute.
 
-Reference: `cpp_tricks/ipc/SHM_SPSC_TRANSPORT.md` Phase 2 (eventfd idle).
+Reference: `ipc/SHM_SPSC_TRANSPORT.md` Phase 2 (eventfd idle).
 
 ## Deliverables
 

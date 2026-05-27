@@ -30,8 +30,8 @@ ADR must state: max sizes, alignment, versioning, naming convention for sideband
 
 Files (suggested):
 
-- `cpp_tricks/ipc/src/router/topology_loader.hpp` (or `.cpp` if you accept one TU)
-- `cpp_tricks/ipc/config/demo_topology.yaml` example
+- `ipc/src/router/topology_loader.hpp` (or `.cpp` if you accept one TU)
+- `config/profiles/*.toml` examples (Phase B shipped four reference profiles)
 - Unit test: load valid + invalid fixtures
 
 ### B3 — Logging callback
@@ -64,7 +64,7 @@ make test-ipc
 make test-router
 # After D1 exists:
 make test-ipc-unit   # or gtest target you add
-./build/ipc/test/router_server shm --config cpp_tricks/ipc/config/demo_topology.yaml  # example CLI
+./build/ipc/test/router_server --config config/profiles/jetson_prod.toml  # example CLI
 ```
 
 ## Do not

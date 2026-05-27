@@ -1,7 +1,7 @@
 # Design principles — Robotics IPC module
 
 **Audience:** Humans and AI agents implementing any phase.  
-**Authority:** Deviations require an ADR. These principles survived the cpp_tricks IPC/router refactor and SHM router work.
+**Authority:** Deviations require an ADR. These principles survived the IPC/router refactor (vendored from `sbow/cpp_tricks` at baseline) and the SHM router work that followed.
 
 ## North star
 

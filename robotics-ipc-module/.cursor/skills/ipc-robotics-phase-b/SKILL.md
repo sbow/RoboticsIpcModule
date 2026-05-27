@@ -27,8 +27,8 @@ description: >-
 
 ## Key files (typical)
 
-- `cpp_tricks/ipc/src/router/topology_loader.hpp`
-- `cpp_tricks/ipc/config/demo_topology.yaml`
+- `ipc/src/router/topology_loader.hpp`
+- `config/profiles/*.toml` (Phase B shipped jetson_prod / x86_dev / hil / sim_cloud)
 - `docs/adr/0005-*.md` (payload) if needed
 
 ## Acceptance

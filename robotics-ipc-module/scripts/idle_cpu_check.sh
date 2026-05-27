@@ -57,11 +57,11 @@ if [[ ! -x "$ROUTER_BIN" ]]; then
 fi
 
 cleanup_shm() {
-    rm -f /dev/shm/cpp_tricks_* 2>/dev/null || true
+    rm -f /dev/shm/rim_* 2>/dev/null || true
 }
 cleanup_shm
 
-readonly LOG=/tmp/cpp_tricks_idle_cpu.log
+readonly LOG=/tmp/rim_idle_cpu.log
 : >"$LOG"
 
 # Launch the router in the background. ROUTER_TEST must NOT be set —
@@ -89,7 +89,7 @@ trap terminate_router EXIT
 # Wait until the router has actually bound (SHM region appears) before
 # starting the measurement window. Bound by a 3 s deadline.
 deadline=$(( $(date +%s) + 3 ))
-until [[ -e /dev/shm/cpp_tricks_router_sensor ]]; do
+until [[ -e /dev/shm/rim_router_sensor ]]; do
     if (( $(date +%s) >= deadline )); then
         echo "${C_RED}[idle-cpu] router did not bind within 3 s; aborting${C_RESET}" >&2
         cat "$LOG" >&2 || true

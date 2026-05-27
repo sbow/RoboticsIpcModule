@@ -3,7 +3,7 @@
 #
 # Loop `make test-router` N times. Abort on first failure. Emit a per-
 # iteration timing line and a final summary (mean / min / max / total).
-# Cleans /dev/shm/cpp_tricks_* and /tmp/cpp_tricks_*.sock between
+# Cleans /dev/shm/rim_* and /tmp/rim_*.sock between
 # iterations so a flake in run K can't cascade into run K+1.
 #
 # Usage:
@@ -34,8 +34,8 @@ cleanup_paths() {
     # SHM regions live under /dev/shm/. UDS sockets and test logs live
     # under /tmp/. We intentionally leave the build/ tree alone — soak
     # is about runtime artefacts, not rebuilds.
-    rm -f /dev/shm/cpp_tricks_* 2>/dev/null || true
-    rm -f /tmp/cpp_tricks_*.sock /tmp/cpp_tricks_*.log 2>/dev/null || true
+    rm -f /dev/shm/rim_* 2>/dev/null || true
+    rm -f /tmp/rim_*.sock /tmp/rim_*.log 2>/dev/null || true
 }
 
 trap cleanup_paths EXIT
@@ -62,7 +62,7 @@ for i in $(seq 1 "$N"); do
     # Time the iteration with monotonic-ish millis (date +%s%3N is GNU
     # date; safe on Linux).
     start_ms=$(date +%s%3N)
-    if ./build/ipc/test/router_test >/tmp/cpp_tricks_soak_iter.log 2>&1; then
+    if ./build/ipc/test/router_test >/tmp/rim_soak_iter.log 2>&1; then
         end_ms=$(date +%s%3N)
         iter_ms=$((end_ms - start_ms))
         passed+=1
@@ -78,7 +78,7 @@ for i in $(seq 1 "$N"); do
         printf '[soak] iter %2d/%d  %selapsed=%sms FAIL%s\n' \
             "$i" "$N" "$C_RED" "$iter_ms" "$C_RESET" >&2
         echo "${C_DIM}--- router_test output ---${C_RESET}" >&2
-        cat /tmp/cpp_tricks_soak_iter.log >&2 || true
+        cat /tmp/rim_soak_iter.log >&2 || true
         echo "${C_DIM}--- end output ---${C_RESET}" >&2
         echo "${C_RED}[soak] aborting after $(( i - 1 )) successful iterations${C_RESET}" >&2
         exit 1

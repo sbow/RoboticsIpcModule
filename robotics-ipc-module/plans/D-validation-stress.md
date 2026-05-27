@@ -59,7 +59,7 @@ runs against UDS / UDP / SHM unless transport-specific.
 
 | Scenario | Pass criteria |
 |----------|---------------|
-| SIGKILL router | Clients exit on TERM within 1 s; next `router_server` bind succeeds (no stale `/dev/shm/cpp_tricks_*` blocking) |
+| SIGKILL router | Clients exit on TERM within 1 s; next `router_server` bind succeeds (no stale `/dev/shm/rim_*` blocking) |
 | Slow recorder (SHM) | Sensor publishes at 1 kHz × 10 s; recorder drains at 100 Hz; **per-peer attribution gate** (D2a) asserts `dropped_full_per_peer[recorder] > 0` AND `dropped_full_per_peer[controller] == 0`; no deadlock; controller continues to receive |
 | Burst sensor | 1 kHz × 10 s on right-sized rings (D0); subscribers see ≥ 99.5% of frames in steady state; seq gap count == published − received (closes deferred C4) |
 | Profile switch smoke | Load `jetson_prod.toml` and `hil.toml` back-to-back; router starts, peers connect on each profile's transport, one round trip succeeds, clean shutdown |
@@ -80,7 +80,7 @@ Scripts under `robotics-ipc-module/scripts/`:
 | Script | Purpose |
 |---|---|
 | `soak_router.sh N` | Loop `make test-router` N times; abort on first failure; print per-iteration timing |
-| `shm_leak_check.sh` | Count `/dev/shm/cpp_tricks_*` and `/tmp/cpp_tricks_*.sock` before / after a full `make test-ipc-unit && make test-router`; assert delta == 0 |
+| `shm_leak_check.sh` | Count `/dev/shm/rim_*` and `/tmp/rim_*.sock` before / after a full `make test-ipc-unit && make test-router`; assert delta == 0 |
 | `idle_cpu_check.sh` | Start `router_server jetson_prod.toml`, sample `pidstat` for 60 s, assert idle CPU ≤ 5% (re-baselines the Phase C measurement on the current revision) |
 | `latency_histogram.sh` (optional) | Wrap `echo_client_benchmark` with a quantile summarizer; emit p50 / p95 / p99 |
 

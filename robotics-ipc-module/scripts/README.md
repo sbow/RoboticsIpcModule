@@ -2,8 +2,8 @@
 
 Shell wrappers around the existing test binaries for soak, leak
 detection, and CPU regression. Each script is self-contained, exits
-non-zero on the first failure, and cleans `/dev/shm/cpp_tricks_*` +
-`/tmp/cpp_tricks_*.sock` via a `trap` so it never leaves the host in a
+non-zero on the first failure, and cleans `/dev/shm/rim_*` +
+`/tmp/rim_*.sock` via a `trap` so it never leaves the host in a
 worse state than it found it.
 
 All scripts honor a NO-TTY mode (colour escapes are suppressed when
@@ -15,8 +15,8 @@ under both the repo's bash and any custom toolchain.
 | Script | Wrapper target | What it does |
 |---|---|---|
 | [`soak_router.sh`](soak_router.sh) | `make test-soak` (override with `SOAK_ITERATIONS=N`) | Loop `./build/ipc/test/router_test` N times (default 10), cleaning SHM/UDS leftovers between iterations, abort on first failure, print a per-iteration timing line, end with `summary: passed=N/N total=Xms mean=Yms min=A max=B` and a CSV-ish `iterations_ms:` line for graphing. |
-| [`shm_leak_check.sh`](shm_leak_check.sh) | `make test-leak-check` | Count `cpp_tricks_*` resources in `/dev/shm/` and `/tmp/*.sock` before and after `make test-ipc-unit && make test-ipc-integration && make test-router`; assert delta == 0. Auto-cleans pre-existing leftovers from interrupted prior runs so the baseline is honest. Set `LEAK_CHECK_SKIP_ROUTER=1` for hosts where AF_INET is sandboxed. |
-| [`idle_cpu_check.sh`](idle_cpu_check.sh) | `make test-idle-cpu` | Boot `router_server --config config/profiles/jetson_prod.toml`, wait for `/dev/shm/cpp_tricks_router_sensor` to appear (bind readiness), sample `pidstat -u -p $PID INTERVAL SAMPLES`, assert avg `%CPU` ≤ threshold via `bc -l`. Knobs: `IDLE_CPU_SAMPLES=6`, `IDLE_CPU_INTERVAL=10`, `IDLE_CPU_THRESHOLD=5.0` (≈ 60 s window). Regression gate for [ADR 0007](../../docs/adr/0007-router-idle-wake.md). |
+| [`shm_leak_check.sh`](shm_leak_check.sh) | `make test-leak-check` | Count `rim_*` resources in `/dev/shm/` and `/tmp/*.sock` before and after `make test-ipc-unit && make test-ipc-integration && make test-router`; assert delta == 0. Auto-cleans pre-existing leftovers from interrupted prior runs so the baseline is honest. Set `LEAK_CHECK_SKIP_ROUTER=1` for hosts where AF_INET is sandboxed. |
+| [`idle_cpu_check.sh`](idle_cpu_check.sh) | `make test-idle-cpu` | Boot `router_server --config config/profiles/jetson_prod.toml`, wait for `/dev/shm/rim_router_sensor` to appear (bind readiness), sample `pidstat -u -p $PID INTERVAL SAMPLES`, assert avg `%CPU` ≤ threshold via `bc -l`. Knobs: `IDLE_CPU_SAMPLES=6`, `IDLE_CPU_INTERVAL=10`, `IDLE_CPU_THRESHOLD=5.0` (≈ 60 s window). Regression gate for [ADR 0007](../../docs/adr/0007-router-idle-wake.md). |
 | [`latency_histogram.sh`](latency_histogram.sh) | `make test-latency-histogram` | (Optional) Re-run `echo_tests` N times (default 5), parse `<TRANSPORT> round trips in 5s: <N>` lines, print `min / p25 / p50 / p75 / max / max-over-min` per transport. **Throughput** variance — not per-trip latency. Per-trip would require a `--per-trip-csv` flag on `echo_client_benchmark`, deferred to Phase E. |
 
 ## Acceptance gate
@@ -63,7 +63,7 @@ The recipe that works:
 
 ```bash
 sudo pkill -KILL -f "build/ipc/test/router_server"
-rm -f /dev/shm/cpp_tricks_* /tmp/cpp_tricks_*.sock
+rm -f /dev/shm/rim_* /tmp/rim_*.sock
 ```
 
 Anchor `-f` on the **binary path** (`build/ipc/test/router_server`),
@@ -76,8 +76,8 @@ Sanity-check afterwards:
 
 ```bash
 pgrep -ax router_server          # should print nothing
-ls /dev/shm/cpp_tricks_* 2>&1    # should say "No such file or directory"
-ls /tmp/cpp_tricks_*.sock 2>&1   # same
+ls /dev/shm/rim_* 2>&1    # should say "No such file or directory"
+ls /tmp/rim_*.sock 2>&1   # same
 ```
 
 After cleanup, `make test-leak-check` should pass with a zero baseline
@@ -90,9 +90,9 @@ by reading the post-run resource list the leak-check script prints.
      any space-separated env-var input, read it into an array
      **before** narrowing `IFS` (see `latency_histogram.sh`).
   2. Honour `[[ -t 1 ]]` for colour output.
-  3. Install a `trap` that cleans `/dev/shm/cpp_tricks_*` and
-     `/tmp/cpp_tricks_*.{sock,log}`.
-  4. Use the SHM region (`/dev/shm/cpp_tricks_router_sensor`) as the
+  3. Install a `trap` that cleans `/dev/shm/rim_*` and
+     `/tmp/rim_*.{sock,log}`.
+  4. Use the SHM region (`/dev/shm/rim_router_sensor`) as the
      router-bind readiness signal, not a `sleep`.
   5. Print a single-line PASS / FAIL summary with the threshold and
      measured value visible. Exit non-zero on failure.

@@ -61,9 +61,9 @@ int assertions_failed = 0;
     }                                                                      \
 } while (0)
 
-constexpr const char* kRouterListen = "/cpp_tricks_burst_sensor_router";
-constexpr const char* kSensorShm    = "/cpp_tricks_burst_sensor_sensor";
-constexpr const char* kSubShm       = "/cpp_tricks_burst_sensor_sub";
+constexpr const char* kRouterListen = "/rim_burst_sensor_router";
+constexpr const char* kSensorShm    = "/rim_burst_sensor_sensor";
+constexpr const char* kSubShm       = "/rim_burst_sensor_sub";
 
 constexpr uint8_t kSensorId = 1;
 constexpr uint8_t kSubId    = 2;

@@ -14,9 +14,9 @@
 namespace {
 
 constexpr uint16_t kUdpPort = 19000;
-constexpr const char* kUdsServerPath = "/tmp/cpp_tricks_echo_server.sock";
-constexpr const char* kUdsClientPath = "/tmp/cpp_tricks_echo_client.sock";
-constexpr const char* kShmEchoName = "/cpp_tricks_shm_echo";
+constexpr const char* kUdsServerPath = "/tmp/rim_echo_server.sock";
+constexpr const char* kUdsClientPath = "/tmp/rim_echo_client.sock";
+constexpr const char* kShmEchoName = "/rim_shm_echo";
 constexpr auto kTestDuration = std::chrono::seconds(5);
 constexpr int kRecvTimeoutMs = 200;
 

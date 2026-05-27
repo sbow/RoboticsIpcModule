@@ -47,10 +47,10 @@ int g_failed = 0;
 
 // UDS — three peers keyed by sun_path; resolver compares strcmp.
 
-constexpr const char* kSensorUdsPath     = "/tmp/cpp_tricks_resolver_a.sock";
-constexpr const char* kControllerUdsPath = "/tmp/cpp_tricks_resolver_b.sock";
-constexpr const char* kRecorderUdsPath   = "/tmp/cpp_tricks_resolver_c.sock";
-constexpr const char* kRouterUdsPath     = "/tmp/cpp_tricks_resolver_router.sock";
+constexpr const char* kSensorUdsPath     = "/tmp/rim_resolver_a.sock";
+constexpr const char* kControllerUdsPath = "/tmp/rim_resolver_b.sock";
+constexpr const char* kRecorderUdsPath   = "/tmp/rim_resolver_c.sock";
+constexpr const char* kRouterUdsPath     = "/tmp/rim_resolver_router.sock";
 
 constexpr PeerEntry kUdsPeers[] = {
     {1, "sensor",     peer_uds(kSensorUdsPath)},
@@ -84,7 +84,7 @@ void test_uds_resolves_each_known_peer() {
 }
 
 void test_uds_unknown_path_returns_invalid_sentinel() {
-    const auto unknown = make_uds_recv("/tmp/cpp_tricks_resolver_ghost.sock");
+    const auto unknown = make_uds_recv("/tmp/rim_resolver_ghost.sock");
     EXPECT_EQ(peer_id_from_recv<Uds>(kUdsTopo, unknown), kEndpointInvalid);
 }
 
@@ -99,7 +99,7 @@ void test_uds_partial_prefix_does_not_match() {
     // strcmp is the comparison; a path that is a prefix of a real peer
     // path must NOT match (regression: someone might be tempted to use
     // strncmp in the future).
-    const auto prefix = make_uds_recv("/tmp/cpp_tricks_resolver_a");
+    const auto prefix = make_uds_recv("/tmp/rim_resolver_a");
     EXPECT_EQ(peer_id_from_recv<Uds>(kUdsTopo, prefix), kEndpointInvalid);
 }
 

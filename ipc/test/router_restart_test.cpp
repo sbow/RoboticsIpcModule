@@ -3,7 +3,7 @@
 // Subprocess-driven: spawn `router_server --config jetson_prod.toml`, let it
 // bind its SHM regions, then `kill -9` it (skipping every destructor) and
 // confirm that a second router_server can bind the same profile without
-// errors. This is the "stale /dev/shm/cpp_tricks_* won't block the next
+// errors. This is the "stale /dev/shm/rim_* won't block the next
 // run" promise from the Phase D plan, and a regression guard for the
 // shm_open/ftruncate/memset path in ShmRegion::bind.
 //
@@ -55,10 +55,10 @@ constexpr const char* kJetsonProfile   = "config/profiles/jetson_prod.toml";
 // SHM names from jetson_prod.toml — kept here as constants so the test
 // can verify they exist after a SIGKILL and clean them up at the end.
 const char* const kShmNames[] = {
-    "/cpp_tricks_router",
-    "/cpp_tricks_router_sensor",
-    "/cpp_tricks_router_controller",
-    "/cpp_tricks_router_recorder",
+    "/rim_router",
+    "/rim_router_sensor",
+    "/rim_router_controller",
+    "/rim_router_recorder",
 };
 
 void shm_unlink_all() {
@@ -140,7 +140,7 @@ bool wait_for_router_bind(int deadline_ms) {
     while (std::chrono::steady_clock::now() < deadline) {
         // jetson_prod.toml binds the sensor peer ring first by the order
         // of [[peers]] in the file; once that exists, bind is in progress.
-        if (shm_exists("/cpp_tricks_router_sensor")) {
+        if (shm_exists("/rim_router_sensor")) {
             return true;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -176,9 +176,9 @@ void test_sigkill_router_leaves_recoverable_shm() {
     // ShmRegion::~ShmRegion's shm_unlink. This is the documented Phase A
     // / LESSONS-LEARNED state — and the precondition for what we want to
     // prove next.
-    EXPECT(shm_exists("/cpp_tricks_router_sensor"));
-    EXPECT(shm_exists("/cpp_tricks_router_controller"));
-    EXPECT(shm_exists("/cpp_tricks_router_recorder"));
+    EXPECT(shm_exists("/rim_router_sensor"));
+    EXPECT(shm_exists("/rim_router_controller"));
+    EXPECT(shm_exists("/rim_router_recorder"));
 
     // -------- Round 2: spawn again, must bind cleanly -------------------
     // ShmSpsc::bind calls shm_open(O_CREAT | O_RDWR) + ftruncate. Even

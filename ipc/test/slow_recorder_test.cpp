@@ -55,10 +55,10 @@ int assertions_failed = 0;
     }                                                                      \
 } while (0)
 
-constexpr const char* kRouterListen   = "/cpp_tricks_slow_recorder_router";
-constexpr const char* kSensorShm      = "/cpp_tricks_slow_recorder_sensor";
-constexpr const char* kControllerShm  = "/cpp_tricks_slow_recorder_controller";
-constexpr const char* kRecorderShm    = "/cpp_tricks_slow_recorder_recorder";
+constexpr const char* kRouterListen   = "/rim_slow_recorder_router";
+constexpr const char* kSensorShm      = "/rim_slow_recorder_sensor";
+constexpr const char* kControllerShm  = "/rim_slow_recorder_controller";
+constexpr const char* kRecorderShm    = "/rim_slow_recorder_recorder";
 
 constexpr uint8_t kSensorId     = 1;
 constexpr uint8_t kControllerId = 2;

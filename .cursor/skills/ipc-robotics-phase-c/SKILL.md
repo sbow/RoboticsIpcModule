@@ -12,7 +12,7 @@ description: >-
 
 `robotics-ipc-module/plans/C-transport-hardening.md`
 
-Read `cpp_tricks/ipc/SHM_SPSC_TRANSPORT.md` for Phase 2 idle design.
+Read `ipc/SHM_SPSC_TRANSPORT.md` for Phase 2 idle design.
 
 ## Workflow
 

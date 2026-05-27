@@ -58,7 +58,7 @@ default-1024 status quo.
 [[peers]]
 id              = 1
 name            = "sensor"
-local           = "shm:/cpp_tricks_router_sensor"
+local           = "shm:/rim_router_sensor"
 shm_slot_count  = 256        # optional; default = ShmSpsc::BindParams::slot_count (256)
 shm_max_payload = 64         # optional; default = ShmSpsc::BindParams::max_payload (1024)
 ```
@@ -259,7 +259,7 @@ make test-router
 # Loaded jetson_prod profile binds with 256 × 64.
 ./build/ipc/test/router_server --config config/profiles/jetson_prod.toml \
   & ROUTER_PID=$!
-ls -la /dev/shm/cpp_tricks_router*    # files now ~35 KB each, down from ~526 KB
+ls -la /dev/shm/rim_router*    # files now ~35 KB each, down from ~526 KB
 kill -TERM $ROUTER_PID
 ```
 
