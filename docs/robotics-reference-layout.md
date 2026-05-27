@@ -149,11 +149,11 @@ flowchart LR
 
 ## Integration patterns
 
-The router stays transport-only. Every domain integration (camera, ML, serial) is a separate peer process matching the [ADR 0008](adr/0008-router-frame-v2.md) wire layout.
+The router stays transport-only. Every domain integration (camera, ML, serial) is a separate peer process matching the [ADR 0008](adr/0008-router-frame-v2.md) wire layout. Stub directories for the Phase F bridges are scaffolded under [`examples/bridges/`](../examples/bridges/) — see the [bridges index](../examples/bridges/README.md) for the principles and the per-bridge stubs for contract pointers.
 
 ### Vision capture (`vision_capture`, peer 4)
 
-**Status:** sketch only ([F5](../robotics-ipc-module/plans/F-interoperability-bridges.md)). The reference layout below is the contract a user-written `vision_capture` peer should follow.
+**Status:** sketch only — stub at [`examples/bridges/vision_peer/`](../examples/bridges/vision_peer/); implementation lands in [F5](../robotics-ipc-module/plans/F-interoperability-bridges.md#f5--vision-metadata-peer-sketch). The reference layout below is the contract a user-written `vision_capture` peer should follow.
 
 **Process shape.**
 
@@ -186,7 +186,7 @@ Today only `name` / `max_payload_bytes` / optional `version` are parsed; `class`
 
 ### ML inference (`ml_inference`, peer 5)
 
-**Status:** sketch only ([F5](../robotics-ipc-module/plans/F-interoperability-bridges.md)). TensorRT / CUDA engine implementation is the **user's** code; the module provides transport for the input/output tensors.
+**Status:** sketch only — co-resident with the vision peer stub at [`examples/bridges/vision_peer/`](../examples/bridges/vision_peer/) for now (F5 covers both peers' contract surface). TensorRT / CUDA engine implementation is the **user's** code; the module provides transport for the input/output tensors.
 
 **Process shape.**
 
@@ -199,7 +199,7 @@ Today only `name` / `max_payload_bytes` / optional `version` are parsed; `class`
 
 ### MAVLink gateway (`mavlink_gateway`, peer 6)
 
-**Status:** sketch only ([F4](../robotics-ipc-module/plans/F-interoperability-bridges.md)).
+**Status:** sketch only — stub at [`examples/bridges/mavlink_gateway/`](../examples/bridges/mavlink_gateway/); implementation lands in [F4](../robotics-ipc-module/plans/F-interoperability-bridges.md#f4--mavlink-gateway-sketch).
 
 **Process shape.**
 
@@ -221,13 +221,13 @@ Today only `name` / `max_payload_bytes` / optional `version` are parsed; `class`
 
 ### Python bridge (`python_tooling`, peer 7)
 
-**Status:** sketch only ([F2](../robotics-ipc-module/plans/F-interoperability-bridges.md)).
+**Status:** sketch only — stub at [`examples/bridges/python_peer/`](../examples/bridges/python_peer/); implementation lands in [F2](../robotics-ipc-module/plans/F-interoperability-bridges.md#f2--python-bridge-example).
 
 **Process shape.** Standalone Python process (any interpreter). Connects to the router on UDS (recommended on x86 dev) or UDP (HIL / cloud). Matches the [ADR 0008](adr/0008-router-frame-v2.md) frame layout via `ctypes.Structure` or `struct.pack`. **Do not** embed CPython in `libipc` — header-only C++ keeps the boundary clean ([ADR 0004](adr/0004-robotics-module-boundaries.md)).
 
 ### Node dashboard gateway (`dashboard_feed`, peer 8)
 
-**Status:** sketch only ([F3](../robotics-ipc-module/plans/F-interoperability-bridges.md)).
+**Status:** sketch only — stub at [`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/); implementation lands in [F3](../robotics-ipc-module/plans/F-interoperability-bridges.md#f3--node-dashboard-gateway-example).
 
 **Process shape.** Node.js process. UDS client to router, WebSocket server to browser. Decodes the inline 32 B payload + sideband metadata into JSON for the browser. The C++ router has no Node API surface — the gateway parses the frame layout itself.
 
@@ -265,7 +265,7 @@ The [`shm_leak_check.sh`](../robotics-ipc-module/scripts/shm_leak_check.sh) scri
 | Topic | Where it lands |
 |-------|----------------|
 | systemd unit files | [robotics-ipc-module/deploy/systemd/](../robotics-ipc-module/deploy/systemd/) (Phase E E2) |
-| Bridge pointers | [Phase E E3](../robotics-ipc-module/plans/E-robotics-integration.md#e3--bridge-pointers-optional) → Phase F |
+| Bridge pointers / scaffolding | [examples/bridges/](../examples/bridges/) (Phase E E3 scaffolding) |
 | Timestamp ADR (`CLOCK_MONOTONIC_RAW` vs PTP) | [Phase E E4](../robotics-ipc-module/plans/E-robotics-integration.md#e4--time-sync) |
 | Profile templates + `deployment-profiles.md` | [Phase F F1](../robotics-ipc-module/plans/F-interoperability-bridges.md) |
 | Python / Node / MAVLink / vision peer code | [Phase F F2–F5](../robotics-ipc-module/plans/F-interoperability-bridges.md) |
