@@ -362,7 +362,7 @@ make debug                  # rebuild with -g -O0
 make clean
 ```
 
-### Deployment profiles (Phase B)
+### Deployment profiles (Phase F F1)
 
 `config/profiles/*.toml` ships four reference profiles. Run the router
 server against any of them:
@@ -374,9 +374,16 @@ server against any of them:
 ./build/ipc/test/router_server --config config/profiles/sim_cloud.toml    # UDP (cloud)
 ```
 
-Same peer IDs (1=sensor, 2=controller, 3=recorder) and route rules across
-profiles — only addresses and transport kind change. See
-[SYSTEM-VISION.md](../robotics-ipc-module/SYSTEM-VISION.md) for the
+Phase F F1 expanded each profile to **six peers** (1 sensor, 2 controller,
+3 recorder, 4 vision_capture, 5 ml_inference, 8 dashboard_feed) so the
+files match the [8-peer catalog](../robotics-ipc-module/SYSTEM-VISION.md#peer-catalog-illustrative)
+1:1 (peers 6 mavlink_gateway and 7 python_tooling land with F4 / F2).
+Same peer IDs and route rules across profiles — only addresses and
+transport kind change. See [docs/deployment-profiles.md](../docs/deployment-profiles.md)
+for the operator-facing selector + per-profile shape + the two known
+limitations (single-transport-per-router and 2-destination cap, both
+cross-referenced to parked review C5). See [SYSTEM-VISION.md](../robotics-ipc-module/SYSTEM-VISION.md)
+for the
 deployment matrix.
 
 #### Per-peer SHM ring sizing (Phase D0 / [ADR 0009](../docs/adr/0009-per-peer-ring-sizing.md))
@@ -556,6 +563,7 @@ UDS rebind after stale socket) and a TOML loader fault path
 - [docs/adr/0008-router-frame-v2.md](../docs/adr/0008-router-frame-v2.md) — RouterFrame v2: 64 B, typed, sequenced, in-frame sideband descriptor
 - [docs/adr/0009-per-peer-ring-sizing.md](../docs/adr/0009-per-peer-ring-sizing.md) — `[[peers]] shm_slot_count` / `shm_max_payload`; right-sizes router-frame rings to one cache line
 - [docs/adr/0010-router-timestamp-clock.md](../docs/adr/0010-router-timestamp-clock.md) — router stamps `timestamp_ns` with `CLOCK_MONOTONIC_RAW` (slew-free, restart-surviving, single-host); cross-host correlation delegated to user code or future dedicated recorder; library helper `router/timestamp.hpp::router_now_ns()`
+- [docs/deployment-profiles.md](../docs/deployment-profiles.md) — Phase F F1 operator-facing companion to [`config/profiles/`](../config/profiles/); profile selector + per-profile shape (jetson_prod / x86_dev / hil / sim_cloud) + route topology + 2-dest-cap and single-transport-per-router limitations cross-referenced to parked C5; resource-name conventions + operator hand-off checklist
 - [ipc/SHM_SPSC_TRANSPORT.md](SHM_SPSC_TRANSPORT.md) — single-producer / single-consumer SHM transport details
-- [config/profiles/*.toml](../config/profiles/) — deployment profiles (x86_dev / jetson_prod / hil / sim_cloud)
+- [config/profiles/*.toml](../config/profiles/) — Phase F F1 deployment profiles (x86_dev / jetson_prod / hil / sim_cloud); see [docs/deployment-profiles.md](../docs/deployment-profiles.md) for the operator-facing selector + per-profile shape + known limitations
 - [third_party/tomlplusplus/LICENSE](../third_party/tomlplusplus/LICENSE) — MIT license for vendored toml++ v3.4.0 single-header parser

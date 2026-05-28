@@ -1,14 +1,30 @@
 # Hardware-in-the-loop bench profile.
 #
+# Phase F F1 deployment template. See docs/deployment-profiles.md for the
+# full picture (profile selector, route topology, dashboard limitation).
+#
 # Transport: UDP on 127.0.0.1. Real plant + sensors are replaced by mock
 # processes (Phase F examples) that bind the same ports; route rules and
 # peer IDs are identical to jetson_prod and x86_dev so the same router
 # binary serves all three with only --config swapping.
 #
+# Peer catalog (SYSTEM-VISION.md + docs/robotics-reference-layout.md):
+#   1 sensor / 2 controller / 3 recorder — demo binaries (mock peers in HIL)
+#   4 vision_capture / 5 ml_inference / 8 dashboard_feed — Phase F sketches
+#
+# Peer IDs 6 (mavlink_gateway) and 7 (python_tooling) are reserved per the
+# 8-peer catalog but not declared here. Port numbers are allocated so that
+# 19106 / 19107 remain free for F4 / F2 to slot in without renumbering.
+#
+# Routes within the 2-destination-per-source cap (RouteRule.dest0/dest1).
+# Dashboard_feed (8) has no inbound route in F1 — see docs/deployment-profiles.md
+# §Dashboard limitation and parked review C5.
+#
 # Usage:
 #   ./build/ipc/test/router_server --config config/profiles/hil.toml
 #
-# See: SYSTEM-VISION.md HIL row.
+# See: docs/deployment-profiles.md (Phase F F1),
+#      SYSTEM-VISION.md HIL row.
 
 [router]
 listen = "udp:127.0.0.1:19100"
@@ -28,10 +44,37 @@ id    = 3
 name  = "recorder"
 local = "udp:127.0.0.1:19103"
 
+[[peers]]
+id    = 4
+name  = "vision_capture"
+local = "udp:127.0.0.1:19104"
+
+[[peers]]
+id    = 5
+name  = "ml_inference"
+local = "udp:127.0.0.1:19105"
+
+# Ports 19106 / 19107 reserved for peers 6 (mavlink_gateway) / 7 (python_tooling).
+
+[[peers]]
+id    = 8
+name  = "dashboard_feed"
+local = "udp:127.0.0.1:19108"
+
+# --- Routes (2-dest-per-source cap per parked review C5) ------------------
+
 [[routes]]
-source = 1
+source = 1                            # sensor   → controller + recorder
 dest   = [2, 3]
 
 [[routes]]
-source = 2
+source = 2                            # controller → recorder
 dest   = [3]
+
+[[routes]]
+source = 4                            # vision_capture → ml_inference + recorder
+dest   = [5, 3]
+
+[[routes]]
+source = 5                            # ml_inference   → controller + recorder
+dest   = [2, 3]

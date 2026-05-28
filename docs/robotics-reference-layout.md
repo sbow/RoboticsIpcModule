@@ -84,14 +84,14 @@ flowchart LR
   NODE -->|WebSocket| WEB[Browser]
 ```
 
-**Per-deployment profile mapping:**
+**Per-deployment profile mapping** (Phase F F1 — see [docs/deployment-profiles.md](deployment-profiles.md) for the operator-facing breakdown):
 
 | Profile | Transport | Listen address | Resource prefix |
 |---------|-----------|----------------|-----------------|
-| [config/profiles/jetson_prod.toml](../config/profiles/jetson_prod.toml) | SHM | `shm:/rim_router` | `/dev/shm/rim_router_*` |
-| [config/profiles/x86_dev.toml](../config/profiles/x86_dev.toml) | UDS | `uds:/tmp/rim_router.sock` | `/tmp/rim_router_*.sock` |
-| [config/profiles/hil.toml](../config/profiles/hil.toml) | UDP loopback | `udp:127.0.0.1:19100` | ports 19100–19103 |
-| [config/profiles/sim_cloud.toml](../config/profiles/sim_cloud.toml) | UDP | `udp:10.0.0.1:19200` (placeholder) | ports 19200–19203 across container subnet |
+| [config/profiles/jetson_prod.toml](../config/profiles/jetson_prod.toml) | SHM (all 6 peers) | `shm:/rim_router` | `/dev/shm/rim_router_*` + sideband `/dev/shm/rim_vision_*` / `rim_ml_*` |
+| [config/profiles/x86_dev.toml](../config/profiles/x86_dev.toml) | UDS (all 6 peers) | `uds:/tmp/rim_router.sock` | `/tmp/rim_router_*.sock` |
+| [config/profiles/hil.toml](../config/profiles/hil.toml) | UDP loopback | `udp:127.0.0.1:19100` | ports 19100–19108 (19106/19107 reserved for F4/F2) |
+| [config/profiles/sim_cloud.toml](../config/profiles/sim_cloud.toml) | UDP | `udp:10.0.0.1:19200` (placeholder) | ports 19200–19208 across container subnet |
 
 ## Per-deployment shapes
 
@@ -281,6 +281,6 @@ The [`shm_leak_check.sh`](../robotics-ipc-module/scripts/shm_leak_check.sh) scri
 | systemd unit files | [robotics-ipc-module/deploy/systemd/](../robotics-ipc-module/deploy/systemd/) (Phase E E2) |
 | Bridge pointers / scaffolding | [examples/bridges/](../examples/bridges/) (Phase E E3 scaffolding) |
 | Timestamp clock | [ADR 0010](adr/0010-router-timestamp-clock.md) — `CLOCK_MONOTONIC_RAW` single-host; cross-host delegated (Phase E E4) |
-| Profile templates + `deployment-profiles.md` | [Phase F F1](../robotics-ipc-module/plans/F-interoperability-bridges.md) |
+| Profile templates + `deployment-profiles.md` | [docs/deployment-profiles.md](deployment-profiles.md) — Phase F F1 (4 profiles × 6 peers; mixed-transport + 2-dest-cap limitations cross-referenced to parked C5) |
 | Python / Node / MAVLink / vision peer code | [Phase F F2–F5](../robotics-ipc-module/plans/F-interoperability-bridges.md) |
 | Open considerations (TensorRT contract depth, CUDA `memory_class`, ARM CI, playback peer, declarative-transport extensions, RT pinning, cross-host time, camera shape, consumption model) | [plans/post-phases-robotics-review.md](../robotics-ipc-module/plans/post-phases-robotics-review.md) |

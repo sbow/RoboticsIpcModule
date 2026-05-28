@@ -30,11 +30,11 @@ Bridges are clients of the router server, using one of the transports the router
 | Deployment | Bridge transport | Resource path / port |
 |------------|------------------|----------------------|
 | x86 dev | UDS | `/tmp/rim_router.sock` |
-| Jetson on-robot | SHM | `/dev/shm/rim_router_<peer>` (in-process bridges) or UDS (out-of-process Python / Node) |
-| HIL bench | UDP loopback | `127.0.0.1:19100` |
+| Jetson on-robot | SHM | `/dev/shm/rim_router_<peer>` (all 6 F1 peers on SHM — see [docs/deployment-profiles.md §Known limitations](../../docs/deployment-profiles.md#known-limitations) for why Node-style bridges currently need a native SHM addon or a separate UDS bridge daemon) |
+| HIL bench | UDP loopback | `127.0.0.1:19100` (ports 19101–19108 per peer; see [hil.toml](../../config/profiles/hil.toml)) |
 | Sim / CI cloud | UDP | container subnet per `sim_cloud.toml` |
 
-For per-bridge contract details (which `RouterFrame` fields a Python peer reads / writes, sideband region layout for vision, etc.), see the **Integration patterns** section in [`docs/robotics-reference-layout.md`](../../docs/robotics-reference-layout.md#integration-patterns) — that's the authoritative contract surface, written in Phase E E1.
+For the operator-facing breakdown — selector, per-profile shape, route topology, known limitations — see [`docs/deployment-profiles.md`](../../docs/deployment-profiles.md) (Phase F F1). For per-bridge contract details (which `RouterFrame` fields a Python peer reads / writes, sideband region layout for vision, etc.), see the **Integration patterns** section in [`docs/robotics-reference-layout.md`](../../docs/robotics-reference-layout.md#integration-patterns) — that's the authoritative contract surface, written in Phase E E1.
 
 ## Layout convention (Phase F target)
 
@@ -56,6 +56,7 @@ Phase E ships the **deployment contract** (peer catalog, frame fields, sideband 
 
 ## Related documents
 
+- [docs/deployment-profiles.md](../../docs/deployment-profiles.md) — Phase F F1 operator-facing companion to `config/profiles/` (selector + per-profile shape + 2-dest-cap and single-transport-per-router limitations)
 - [docs/robotics-reference-layout.md](../../docs/robotics-reference-layout.md) — Phase E reference layout (peer catalog + per-bridge integration patterns + RouterFrame field contract)
 - [robotics-ipc-module/plans/F-interoperability-bridges.md](../../robotics-ipc-module/plans/F-interoperability-bridges.md) — Phase F deliverables F1 – F5
 - [docs/adr/0004-robotics-module-boundaries.md](../../docs/adr/0004-robotics-module-boundaries.md) — module-boundary policy (what's in libipc vs in `examples/bridges/`)

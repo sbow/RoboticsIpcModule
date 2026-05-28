@@ -1,13 +1,37 @@
 # x86 development profile — Linux laptop / workstation.
 #
-# Transport: UDS sockets under /tmp (matches the historical demo paths so
-# existing manual smoke tests keep working). Same peer IDs and route rules
-# as every other profile — only address strings differ.
+# Phase F F1 deployment template. See docs/deployment-profiles.md for the
+# full picture (profile selector, route topology, dashboard limitation).
+#
+# Transport: UDS sockets under /tmp/rim_router_*.sock. Matches the established
+# rim_ resource-name convention; no /dev/shm regions touched (dev laptops
+# may or may not have CAP_IPC_LOCK / sufficient tmpfs sizing for SHM rings,
+# and UDS is plenty fast for non-realtime dev work). All 6 peers share the
+# same transport — easiest to swap between jetson_prod and x86_dev when
+# iterating on a peer.
+#
+# Production-style x86 (under systemd, rim user) typically uses /run/rim/
+# (created by `install -d -o rim -g rim /run/rim`); operators substitute
+# the path prefix in this profile to match their `ReadWritePaths=`
+# directive in rim-router.service. /tmp/ is the dev-on-laptop default
+# because /run/ requires root and breaks `make test-router`.
+#
+# Peer catalog (SYSTEM-VISION.md + docs/robotics-reference-layout.md):
+#   1 sensor / 2 controller / 3 recorder — demo binaries today
+#   4 vision_capture / 5 ml_inference / 8 dashboard_feed — Phase F sketches
+#
+# Peer IDs 6 (mavlink_gateway) and 7 (python_tooling) are reserved per the
+# 8-peer catalog but not declared here — F4 / F2 will append them.
+#
+# Routes within the 2-destination-per-source cap (RouteRule.dest0/dest1).
+# Dashboard_feed (8) has no inbound route in F1 — see docs/deployment-profiles.md
+# §Dashboard limitation and parked review C5.
 #
 # Usage:
 #   ./build/ipc/test/router_server --config config/profiles/x86_dev.toml
 #
-# See: docs/adr/0004-robotics-module-boundaries.md (module surface),
+# See: docs/deployment-profiles.md (Phase F F1),
+#      docs/adr/0004-robotics-module-boundaries.md (module surface),
 #      ipc/src/router/topology_loader.hpp (schema).
 
 [router]
@@ -16,22 +40,47 @@ listen = "uds:/tmp/rim_router.sock"
 [[peers]]
 id    = 1
 name  = "sensor"
-local = "uds:/tmp/rim_router_a.sock"
+local = "uds:/tmp/rim_router_sensor.sock"
 
 [[peers]]
 id    = 2
 name  = "controller"
-local = "uds:/tmp/rim_router_b.sock"
+local = "uds:/tmp/rim_router_controller.sock"
 
 [[peers]]
 id    = 3
 name  = "recorder"
-local = "uds:/tmp/rim_router_c.sock"
+local = "uds:/tmp/rim_router_recorder.sock"
+
+[[peers]]
+id    = 4
+name  = "vision_capture"
+local = "uds:/tmp/rim_router_vision_capture.sock"
+
+[[peers]]
+id    = 5
+name  = "ml_inference"
+local = "uds:/tmp/rim_router_ml_inference.sock"
+
+[[peers]]
+id    = 8
+name  = "dashboard_feed"
+local = "uds:/tmp/rim_router_dashboard.sock"
+
+# --- Routes (2-dest-per-source cap per parked review C5) ------------------
 
 [[routes]]
-source = 1     # sensor → controller (primary), recorder (tap)
+source = 1                            # sensor   → controller + recorder
 dest   = [2, 3]
 
 [[routes]]
-source = 2     # controller → recorder (single tap)
+source = 2                            # controller → recorder
 dest   = [3]
+
+[[routes]]
+source = 4                            # vision_capture → ml_inference + recorder
+dest   = [5, 3]
+
+[[routes]]
+source = 5                            # ml_inference   → controller + recorder
+dest   = [2, 3]

@@ -54,11 +54,19 @@ constexpr const char* kJetsonProfile   = "config/profiles/jetson_prod.toml";
 
 // SHM names from jetson_prod.toml — kept here as constants so the test
 // can verify they exist after a SIGKILL and clean them up at the end.
+// Phase F F1 expanded the profile to 6 peers; sideband regions
+// (rim_vision_nv12 / rim_ml_tensor_in / rim_ml_tensor_out) are not in
+// this list because vision_capture / ml_inference processes — which
+// would create them — do not run during router_restart_test (the router
+// binds the control-plane rings, not the sideband ones).
 const char* const kShmNames[] = {
     "/rim_router",
     "/rim_router_sensor",
     "/rim_router_controller",
     "/rim_router_recorder",
+    "/rim_router_vision_capture",
+    "/rim_router_ml_inference",
+    "/rim_router_dashboard",
 };
 
 void shm_unlink_all() {

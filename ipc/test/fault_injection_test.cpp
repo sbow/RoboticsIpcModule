@@ -472,11 +472,18 @@ shm_max_payload = 32
 constexpr const char* kRouterServerBin = "build/ipc/test/router_server";
 constexpr const char* kJetsonProfile   = "config/profiles/jetson_prod.toml";
 
+// Phase F F1 — 6-peer jetson_prod.toml; control-plane SHM regions listed
+// here. Sideband regions (rim_vision_nv12 / rim_ml_tensor_in/out) are
+// excluded because they're created by vision_capture / ml_inference
+// processes that fault_injection_test does not spawn.
 const char* const kShmNames[] = {
     "/rim_router",
     "/rim_router_sensor",
     "/rim_router_controller",
     "/rim_router_recorder",
+    "/rim_router_vision_capture",
+    "/rim_router_ml_inference",
+    "/rim_router_dashboard",
 };
 
 void shm_unlink_all() {

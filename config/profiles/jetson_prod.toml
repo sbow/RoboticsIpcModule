@@ -1,29 +1,58 @@
 # Jetson production profile — embedded robot compute (NVIDIA Jetson, L4T).
 #
-# Transport: per-peer SHM SPSC rings under /dev/shm. Same peer IDs and route
-# rules as every other profile; the router process unlinks-then-creates each
-# region on startup (ADR 0001 lifecycle).
+# Phase F F1 deployment template. See docs/deployment-profiles.md for the
+# full picture (profile selector, route topology, dashboard limitation,
+# operator hand-off).
+#
+# Transport: per-peer SHM SPSC rings under /dev/shm/rim_router_*. All 6 peers
+# on SHM by necessity — the current router architecture binds a single
+# transport per router instance (RouterServer<T> is templated on one
+# Transport; ShmRouterLink iterates ShmRing peers only). A "router that
+# fans out across SHM + UDS in one instance" is the parked C5 declarative-
+# transport gap; until then, IO-side peers either:
+#   (a) run on the same SHM transport (this profile's choice — works, but
+#       Node.js dashboards need a native SHM addon or a separate UDS bridge
+#       daemon to consume frames), or
+#   (b) live in a different router instance with its own profile (multi-
+#       router topology; not in F1 scope).
+#
+# See docs/deployment-profiles.md §Known limitations for the trade-off.
 #
 # Per-peer ring sizing (ADR 0009): every peer's `local` ring carries the 64 B
 # RouterFrame v2 (ADR 0008), so `shm_max_payload = 64` sizes each slot stride
 # to one cache line. With 256 slots, each peer's SHM region is ~35 KiB — a
 # ~15× reduction vs. the legacy 1024 B slot default. Sideband regions (under
-# `[[peers.sideband]]`) carry bulk data and have their own sizing.
+# `[[peers.sideband]]`) carry bulk data and have their own sizing (ADR 0005).
 #
-# Sideband regions (per ADR 0005) are illustrated for the controller peer in
-# anticipation of Phase F vision / ML bridges; the demo controller does not
-# read them today.
+# Peer catalog (SYSTEM-VISION.md + docs/robotics-reference-layout.md):
+#   1 sensor         — IMU / proprioceptive aggregate; small periodic frames
+#   2 controller     — control loop; commands; subscribes sensor + ml
+#   3 recorder       — black-box log; CSV today; subscribe-all via routes
+#   4 vision_capture — metadata frames + sideband (NV12 / JPEG on rim_vision_nv12)         — F5
+#   5 ml_inference   — metadata frames + sideband (tensor in/out on rim_ml_tensor_in/out)  — F5
+#   8 dashboard_feed — Node WebSocket gateway sink (F3)
+#
+# Peer IDs 6 (mavlink_gateway) and 7 (python_tooling) are reserved per the
+# 8-peer catalog but not declared here — F4 / F2 will append them.
+#
+# Routes within the 2-destination-per-source cap (RouteRule.dest0/dest1).
+# Dashboard_feed (8) has no inbound route in F1 — see docs/deployment-profiles.md
+# §Dashboard limitation and parked review C5.
 #
 # Usage:
 #   ./build/ipc/test/router_server --config config/profiles/jetson_prod.toml
 #
-# See: docs/adr/0005-payload-policy-and-sideband.md,
+# See: docs/deployment-profiles.md (Phase F F1),
+#      docs/robotics-reference-layout.md (Phase E E1 peer catalog),
+#      docs/adr/0005-payload-policy-and-sideband.md,
 #      docs/adr/0008-router-frame-v2.md,
 #      docs/adr/0009-per-peer-ring-sizing.md,
 #      SYSTEM-VISION.md.
 
 [router]
 listen = "shm:/rim_router"
+
+# --- Compute-side peers (control loop hot path) --------------------------
 
 [[peers]]
 id              = 1
@@ -39,20 +68,48 @@ local           = "shm:/rim_router_controller"
 shm_slot_count  = 256
 shm_max_payload = 64
 
-  # Example sideband descriptors for Phase F bridges (camera + ML inference).
-  # The controller doesn't consume them today, but Phase E systemd units will
-  # spin up vision_metadata and ml_inference peers that publish into them.
-  # Sideband regions are independent SHM rings (ADR 0005); the control-plane
-  # ring above stays small even though the sideband payloads are megabytes.
+[[peers]]
+id              = 4
+name            = "vision_capture"
+local           = "shm:/rim_router_vision_capture"
+shm_slot_count  = 256                # control-plane is metadata; small ring is enough
+shm_max_payload = 64                 # bulk pixel data lives in the sideband below
+
+  # NV12 / JPEG sideband — separate SHM segment (ADR 0005).
+  # vision_capture writes pixel data here, encodes the slot index into the
+  # outbound RouterFrame's sideband_seq, and subscribers (ml_inference,
+  # recorder) read the slot by indexing into this region.
   [[peers.sideband]]
   class             = "vision_nv12"
-  name              = "/robot_vision_nv12"
-  max_payload_bytes = 8388608      # 8 MB — one 1080p NV12 frame fits
+  name              = "/rim_vision_nv12"
+  max_payload_bytes = 8388608        # 8 MB — one 1080p NV12 frame fits
 
+[[peers]]
+id              = 5
+name            = "ml_inference"
+local           = "shm:/rim_router_ml_inference"
+shm_slot_count  = 256
+shm_max_payload = 64
+
+  # ML tensor sidebands — separate SHM segments (ADR 0005). Two regions:
+  # one for the input tensor handed off from vision_capture, one for the
+  # inference output handed back to controller.
   [[peers.sideband]]
   class             = "ml_tensor_in"
-  name              = "/robot_ml_tensor_in"
-  max_payload_bytes = 16777216     # 16 MB
+  name              = "/rim_ml_tensor_in"
+  max_payload_bytes = 16777216       # 16 MB
+
+  [[peers.sideband]]
+  class             = "ml_tensor_out"
+  name              = "/rim_ml_tensor_out"
+  max_payload_bytes = 4194304        # 4 MB — typical model output is smaller
+
+# --- IO-side peers (subscribers + bridges) -------------------------------
+# These would prefer non-SHM transport in production (recorder writes
+# log files; dashboard_feed bridges to Node.js WebSocket); they ride SHM
+# here because the current router architecture is single-transport per
+# instance. See docs/deployment-profiles.md §Known limitations and
+# parked review C5 for the deferred mixed-transport story.
 
 [[peers]]
 id              = 3
@@ -61,10 +118,27 @@ local           = "shm:/rim_router_recorder"
 shm_slot_count  = 256
 shm_max_payload = 64
 
+[[peers]]
+id              = 8
+name            = "dashboard_feed"
+local           = "shm:/rim_router_dashboard"
+shm_slot_count  = 256
+shm_max_payload = 64
+
+# --- Routes (2-dest-per-source cap per parked review C5) ------------------
+
 [[routes]]
-source = 1
+source = 1                            # sensor   → controller + recorder
 dest   = [2, 3]
 
 [[routes]]
-source = 2
+source = 2                            # controller → recorder
 dest   = [3]
+
+[[routes]]
+source = 4                            # vision_capture → ml_inference + recorder
+dest   = [5, 3]
+
+[[routes]]
+source = 5                            # ml_inference   → controller + recorder
+dest   = [2, 3]
