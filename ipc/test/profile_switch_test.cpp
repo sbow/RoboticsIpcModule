@@ -72,9 +72,9 @@ constexpr uint8_t kRecorderId   = 3;
 
 // Forcibly clean any SHM regions the test or a prior run might have
 // left behind. Hardcodes the names jetson_prod.toml uses (Phase F F1
-// expanded to 6 peers; sideband regions only get created when the
-// real vision / ml peers run, so they're not in this list — but the
-// control-plane peer rings ARE).
+// expanded to 6 peers; F2 added peer 7 python_tooling). Sideband regions
+// only get created when the real vision / ml peers run, so they're not
+// in this list — but the control-plane peer rings ARE.
 void cleanup_jetson_shm() {
     ::shm_unlink("/rim_router");
     ::shm_unlink("/rim_router_sensor");
@@ -82,6 +82,7 @@ void cleanup_jetson_shm() {
     ::shm_unlink("/rim_router_recorder");
     ::shm_unlink("/rim_router_vision_capture");
     ::shm_unlink("/rim_router_ml_inference");
+    ::shm_unlink("/rim_router_python_tooling");
     ::shm_unlink("/rim_router_dashboard");
 }
 
@@ -90,8 +91,9 @@ void cleanup_jetson_shm() {
 void smoke_jetson_round(const LoadedTopology& loaded, const char* label) {
     const RouterTopology& topo = loaded.view();
     // Phase F F1: 6 peers (1 sensor, 2 controller, 3 recorder,
-    // 4 vision_capture, 5 ml_inference, 8 dashboard_feed). All-SHM.
-    EXPECT_EQ(topo.peer_count, 6u);
+    // 4 vision_capture, 5 ml_inference, 8 dashboard_feed). F2 added
+    // peer 7 python_tooling. All-SHM.
+    EXPECT_EQ(topo.peer_count, 7u);
     EXPECT(topo.router_listen.kind == PeerAddressKind::ShmRing);
 
     // Per-peer ring sizing applied from TOML (256 × 64 in jetson_prod.toml,
@@ -165,8 +167,9 @@ void smoke_jetson_round(const LoadedTopology& loaded, const char* label) {
 
 void smoke_hil_round(const LoadedTopology& loaded) {
     const RouterTopology& topo = loaded.view();
-    // Phase F F1: 6 peers (same catalog as Jetson; all UDP loopback).
-    EXPECT_EQ(topo.peer_count, 6u);
+    // Phase F F1: 6 peers (same catalog as Jetson; all UDP loopback);
+    // F2 added peer 7 python_tooling (UDP port 19107).
+    EXPECT_EQ(topo.peer_count, 7u);
     EXPECT(topo.router_listen.kind == PeerAddressKind::UdpEndpoint);
     EXPECT_EQ(topo.router_listen.u.udp.port, static_cast<uint16_t>(19100));
 

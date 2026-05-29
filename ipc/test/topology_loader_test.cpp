@@ -230,26 +230,26 @@ void test_valid_udp() {
 }
 
 void test_load_from_file() {
-    // x86_dev.toml is the Phase F F1 6-peer template: peers 1/2/3 (demo)
-    // plus 4 vision_capture, 5 ml_inference, 8 dashboard_feed (Phase F
-    // sketches). Routes: 1→[2,3], 2→[3], 4→[5,3], 5→[2,3]. Dashboard (8)
-    // has no inbound route within the 2-dest-per-source cap (parked C5).
+    // x86_dev.toml is the Phase F F1+F2 7-peer template: peers 1/2/3 (demo)
+    // plus 4 vision_capture, 5 ml_inference, 7 python_tooling (Phase F F2),
+    // 8 dashboard_feed. Routes: 1→[2,3], 2→[3,7] (F2 tap), 4→[5,3], 5→[2,3],
+    // 7→[3]. Dashboard (8) has no inbound route within the 2-dest-per-source
+    // cap (parked C5). Peer 6 (mavlink_gateway) is reserved for F4.
     LoadedTopology topo = load_topology_from_toml_file(
         "config/profiles/x86_dev.toml");
     const RouterTopology view = topo.view();
-    EXPECT_EQ(view.peer_count, static_cast<std::size_t>(6));
+    EXPECT_EQ(view.peer_count, static_cast<std::size_t>(7));
     EXPECT(view.router_listen.kind == PeerAddressKind::UdsPath);
-    EXPECT_EQ(topo.route_count(), static_cast<std::size_t>(4));
+    EXPECT_EQ(topo.route_count(), static_cast<std::size_t>(5));
 
-    // 8-peer catalog stable IDs: peers 6 (mavlink_gateway) and 7
-    // (python_tooling) are reserved for F4/F2 and absent in F1.
+    // 8-peer catalog stable IDs: peer 6 (mavlink_gateway) is reserved for F4.
     EXPECT(peer_by_id(view, 1) != nullptr);                  // sensor
     EXPECT(peer_by_id(view, 2) != nullptr);                  // controller
     EXPECT(peer_by_id(view, 3) != nullptr);                  // recorder
     EXPECT(peer_by_id(view, 4) != nullptr);                  // vision_capture
     EXPECT(peer_by_id(view, 5) != nullptr);                  // ml_inference
     EXPECT(peer_by_id(view, 6) == nullptr);                  // reserved (F4)
-    EXPECT(peer_by_id(view, 7) == nullptr);                  // reserved (F2)
+    EXPECT(peer_by_id(view, 7) != nullptr);                  // python_tooling (F2)
     EXPECT(peer_by_id(view, 8) != nullptr);                  // dashboard_feed
 }
 
@@ -382,14 +382,15 @@ shm_slot_count  = 256
 void test_shm_ring_sizing_jetson_profile_demonstrates_recommended_values() {
     // The shipped jetson_prod.toml must demonstrate the ADR 0009 sizing on
     // every peer; this guards against future profile edits that accidentally
-    // regress the cache-friendly defaults. Phase F F1 expands the profile
-    // to 6 peers (1 sensor, 2 controller, 3 recorder, 4 vision_capture,
-    // 5 ml_inference, 8 dashboard_feed); all stay on SHM until the parked
-    // C5 mixed-transport gap is closed.
+    // regress the cache-friendly defaults. Phase F F1 expanded the profile
+    // to 6 peers; F2 added peer 7 python_tooling. All 7 stay on SHM until
+    // the parked C11 mixed-transport gap is closed (the Python ctypes bridge
+    // in examples/bridges/python_peer/ is UDS-only today, so on Jetson it
+    // would need a separate UDS bridge daemon).
     LoadedTopology topo = load_topology_from_toml_file(
         "config/profiles/jetson_prod.toml");
     const RouterTopology view = topo.view();
-    EXPECT_EQ(view.peer_count, static_cast<std::size_t>(6));
+    EXPECT_EQ(view.peer_count, static_cast<std::size_t>(7));
     for (size_t i = 0; i < view.peer_count; ++i) {
         const PeerEntry& p = view.peers[i];
         EXPECT(p.local.kind == PeerAddressKind::ShmRing);

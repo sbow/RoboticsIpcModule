@@ -1,6 +1,6 @@
 # Deployment profiles
 
-> **Phase F F1 deliverable.** Operator-facing companion to the four TOML profiles under [`config/profiles/`](../config/profiles/). Pick the right profile for the host, understand the trade-offs each one bakes in, and know where the documented gaps are.
+> **Phase F F1 deliverable** (peer 7 added in F2). Operator-facing companion to the four TOML profiles under [`config/profiles/`](../config/profiles/). Pick the right profile for the host, understand the trade-offs each one bakes in, and know where the documented gaps are.
 
 ## Profile selector
 
@@ -15,7 +15,7 @@
 
 ## Peer catalog
 
-All four F1 profiles declare the same six peers, with stable IDs per the [SYSTEM-VISION.md catalog](../robotics-ipc-module/SYSTEM-VISION.md#peer-catalog-illustrative) and [E1 reference layout](robotics-reference-layout.md#peer-catalog):
+All four profiles declare the same seven peers, with stable IDs per the [SYSTEM-VISION.md catalog](../robotics-ipc-module/SYSTEM-VISION.md#peer-catalog-illustrative) and [E1 reference layout](robotics-reference-layout.md#peer-catalog):
 
 | ID | Name | Phase status | Role |
 |----|------|--------------|------|
@@ -24,9 +24,10 @@ All four F1 profiles declare the same six peers, with stable IDs per the [SYSTEM
 | 3 | `recorder` | Demo binary today | Black-box log (CSV); subscribe-all via routes |
 | 4 | `vision_capture` | Sketch — Phase F F5 | CSI/V4L camera pipeline; metadata frames + NV12 sideband |
 | 5 | `ml_inference` | Sketch — Phase F F5 | CUDA / TensorRT engine; metadata frames + tensor sidebands |
+| 7 | `python_tooling` | **Implemented — Phase F F2** ([`examples/bridges/python_peer/`](../examples/bridges/python_peer/)) | Python subscriber / publisher; UDS today, ctypes RouterFrame port |
 | 8 | `dashboard_feed` | Sketch — Phase F F3 | Node UDS → WebSocket gateway |
 
-**Peer IDs 6 (`mavlink_gateway`) and 7 (`python_tooling`) are intentionally absent in F1.** Phases F4 and F2 will append them — the profile files leave room (port 19106/19107 in `hil.toml`, address `10.0.0.7/.8` in `sim_cloud.toml`) so adding them later does not require renumbering.
+**Peer ID 6 (`mavlink_gateway`) is intentionally absent until F4.** The profile files leave room (port 19106 in `hil.toml`, address `10.0.0.7` in `sim_cloud.toml`) so adding it later does not require renumbering.
 
 ## Route topology
 
@@ -39,15 +40,18 @@ flowchart LR
   REC[recorder 3]
   V[vision_capture 4]
   ML[ml_inference 5]
+  PY[python_tooling 7]
   DASH[dashboard_feed 8]
 
   S -->|sensor data + tap| C
   S -->|sensor data + tap| REC
   C -->|commands| REC
+  C -->|controller tap| PY
   V -->|metadata + sideband ref| ML
   V -->|metadata + sideband ref| REC
   ML -->|results + sideband ref| C
   ML -->|results + sideband ref| REC
+  PY -->|tooling output| REC
 
   DASH:::sketch
   classDef sketch fill:#eee,stroke:#888,stroke-dasharray:4 4
@@ -61,8 +65,8 @@ source = 1                            # sensor   → controller + recorder
 dest   = [2, 3]
 
 [[routes]]
-source = 2                            # controller → recorder
-dest   = [3]
+source = 2                            # controller → recorder + python_tooling (F2 tap)
+dest   = [3, 7]
 
 [[routes]]
 source = 4                            # vision_capture → ml_inference + recorder
@@ -71,9 +75,13 @@ dest   = [5, 3]
 [[routes]]
 source = 5                            # ml_inference   → controller + recorder
 dest   = [2, 3]
+
+[[routes]]
+source = 7                            # python_tooling → recorder (F2)
+dest   = [3]
 ```
 
-Recorder (peer 3) is the central "log + tap" point — every active source has a destination of 3, so the recorder sees the full dataflow.
+Recorder (peer 3) is the central "log + tap" point — every active source has a destination of 3, so the recorder sees the full dataflow. `python_tooling` (peer 7) gets a controller tap via `source = 2 dest = [3, 7]` so the F2 Python bridge can observe the control plane without taking a destination slot away from the recorder.
 
 ## Per-profile shape
 
@@ -124,14 +132,14 @@ Sideband regions are **owned by the peer**, not the router. The bridge process (
 | vision_capture (4) | 19104 | |
 | ml_inference (5) | 19105 | |
 | _mavlink_gateway (6)_ | _19106_ | _Reserved for F4_ |
-| _python_tooling (7)_ | _19107_ | _Reserved for F2_ |
+| python_tooling (7) | 19107 | Added in F2 (UDP variant not yet wired in [`python_peer/`](../examples/bridges/python_peer/), which is UDS-only today) |
 | dashboard_feed (8) | 19108 | |
 
 ### `sim_cloud.toml` (UDP, container subnet)
 
 **Why UDP across a container subnet:** the orchestrator (Kubernetes, Docker Compose, etc.) assigns one container per peer. Cross-host SHM is not supported by the module ([ADR 0005](adr/0005-payload-policy-and-sideband.md) — SHM is single-host by definition).
 
-**Address allocation:** `10.0.0.x:1920x` per peer (placeholder; orchestrator overrides). Addresses `10.0.0.7` and `10.0.0.8` are reserved for F4 / F2.
+**Address allocation:** `10.0.0.x:1920x` per peer (placeholder; orchestrator overrides). Address `10.0.0.7` is reserved for F4 (`mavlink_gateway`); `python_tooling` (7) lives at `10.0.0.8:19207`.
 
 ## Known limitations
 
@@ -146,7 +154,7 @@ Consequence for F1: all six peers in `jetson_prod.toml` ride SHM, even though IO
 - **Multi-router topology.** Run a second router process with a UDS-only profile, and have one bridge peer subscribe to the SHM router and republish to the UDS router. Not in F1 scope.
 - **Native SHM client in Node.js.** Use a small N-API addon to read the SHM ring directly. Heavy but feasible; the wire layout is documented in [ADR 0008](adr/0008-router-frame-v2.md) §RouterFrame v2.
 
-The proper fix — a `MixedTransportRouterLink` that fans out across SHM/UDS/UDP from a single instance — is captured in [parked review C5 §Declarative transport gaps](../robotics-ipc-module/plans/post-phases-robotics-review.md#c5--declarative-transport-layer-gaps).
+The proper fix — a `MixedTransportRouterLink` that fans out across SHM/UDS/UDP from a single instance, or alternatively a factory-generated bridge daemon pattern between single-transport routers, or peer-side dual-protocol bridges — is captured in [parked review C11 §Mixed-transport networks](../robotics-ipc-module/plans/post-phases-robotics-review.md#c11--mixed-transport-networks) (three options + variants, decision rubric, co-design hint with [C5 §Declarative transport gaps](../robotics-ipc-module/plans/post-phases-robotics-review.md#c5--declarative-transport-layer-gaps)).
 
 ### 2-destination cap
 
@@ -162,9 +170,9 @@ Consequence for F1: `dashboard_feed` (peer 8) has no inbound route. To deliver s
 
 For the reasons above, the F1 profiles **declare** peer 8 (`dashboard_feed`) for catalog completeness and resource-name reservation, but its in-router data path is empty. The F3 Node gateway sketch under [`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/) covers what the bridge looks like; the routing answer lands when C5 closes.
 
-### Peers 6 / 7 absent
+### Peer 6 absent
 
-`mavlink_gateway` (6) and `python_tooling` (7) are reserved IDs in the [8-peer catalog](robotics-reference-layout.md#peer-catalog) but not declared by F1. F4 and F2 will append them — the four profile files leave port / address ranges open for that.
+`mavlink_gateway` (6) is a reserved ID in the [8-peer catalog](robotics-reference-layout.md#peer-catalog) but not declared yet. F4 will append it — the four profile files leave port / address ranges open. `python_tooling` (7) was added in F2 — see [`examples/bridges/python_peer/`](../examples/bridges/python_peer/).
 
 ## Resource-name conventions
 
@@ -173,10 +181,10 @@ All runtime resources use the `rim_` prefix per the [Phase D→E rename](../docs
 | Kind | Convention | Examples |
 |------|-----------|----------|
 | Router listen address (SHM) | `/dev/shm/rim_router` | jetson_prod |
-| Peer control-plane ring (SHM) | `/dev/shm/rim_router_<role>` | `rim_router_sensor`, `rim_router_controller`, `rim_router_vision_capture`, `rim_router_ml_inference`, `rim_router_recorder`, `rim_router_dashboard` |
+| Peer control-plane ring (SHM) | `/dev/shm/rim_router_<role>` | `rim_router_sensor`, `rim_router_controller`, `rim_router_vision_capture`, `rim_router_ml_inference`, `rim_router_recorder`, `rim_router_python_tooling`, `rim_router_dashboard` |
 | Sideband region (SHM) | `/dev/shm/rim_<class>_<channel>` | `rim_vision_nv12`, `rim_ml_tensor_in`, `rim_ml_tensor_out` |
 | Router listen address (UDS) | `/tmp/rim_router.sock` | x86_dev |
-| Peer control-plane (UDS) | `/tmp/rim_router_<role>.sock` | `rim_router_sensor.sock`, etc. |
+| Peer control-plane (UDS) | `/tmp/rim_router_<role>.sock` | `rim_router_sensor.sock`, `rim_router_python_tooling.sock`, etc. |
 | Demo log file (UDS / SHM) | `/tmp/rim_router_<role>.log` | `rim_router_recorder.log` (recorder CSV) |
 
 [`shm_leak_check.sh`](../robotics-ipc-module/scripts/shm_leak_check.sh) and [`rim-router-cleanup.sh`](../robotics-ipc-module/deploy/systemd/rim-router-cleanup.sh) both rely on the `rim_*` prefix to recognize module-owned resources.
@@ -204,11 +212,12 @@ When deploying to a new host:
 
 | Topic | Where it lands |
 |-------|----------------|
-| Python bridge (peer 7) | Phase F F2; stub [`examples/bridges/python_peer/`](../examples/bridges/python_peer/) |
+| Python bridge (peer 7) | **Phase F F2 implemented** — [`examples/bridges/python_peer/`](../examples/bridges/python_peer/) (UDS today; UDP variant deferred — see the bridge README) |
 | Node dashboard (peer 8) implementation | Phase F F3; stub [`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/) |
 | MAVLink gateway (peer 6) | Phase F F4; stub [`examples/bridges/mavlink_gateway/`](../examples/bridges/mavlink_gateway/) |
 | Vision + ML sideband `memory_class` parsing | Phase F F5; stub [`examples/bridges/vision_peer/`](../examples/bridges/vision_peer/) |
-| Mixed-transport router fanout | Parked review C5 (single-transport / 2-dest cap / topic registry collectively) |
+| Mixed-transport router fanout (SHM + UDS + UDP from one router) | Parked review C11 — three options (factory bridge daemons / mixed-transport router / peer-side bridging) + decision rubric |
+| 2-destination cap, topic registry, QoS | Parked review C5 (declarative-transport gaps) |
 | Replay-grade recorder | Parked review C4 (replay needs a richer log format than today's CSV) |
 | TensorRT contract depth, CUDA memory_class, ARM CI, RT pinning, cross-host time, camera shape, consumption model | Parked review C1–C10 — see [plans/post-phases-robotics-review.md](../robotics-ipc-module/plans/post-phases-robotics-review.md) |
 
@@ -224,4 +233,4 @@ When deploying to a new host:
 - [ADR 0010](adr/0010-router-timestamp-clock.md) — `CLOCK_MONOTONIC_RAW` timestamp policy
 - [robotics-ipc-module/deploy/systemd/README.md](../robotics-ipc-module/deploy/systemd/README.md) — Phase E E2 systemd integration
 - [plans/F-interoperability-bridges.md](../robotics-ipc-module/plans/F-interoperability-bridges.md) — Phase F plan
-- [plans/post-phases-robotics-review.md](../robotics-ipc-module/plans/post-phases-robotics-review.md) — open backlog (C1–C10)
+- [plans/post-phases-robotics-review.md](../robotics-ipc-module/plans/post-phases-robotics-review.md) — open backlog (C1–C11); C11 specifically addresses the mixed-transport limitation called out in [Known limitations](#known-limitations) above

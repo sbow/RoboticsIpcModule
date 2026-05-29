@@ -3,10 +3,11 @@
 > **Status:** deferred — revisit when Phase F closes (or earlier if explicitly reopened)
 > **Source:** chat analysis dated 2026-05-26 ([Phase E fit-for-purpose review](f325cb57-00db-4d4e-a19c-2c45473839d1))
 > **Trigger question:** _"Analyze Phase E — is it fit for purpose? Consider TensorRT, CUDA, ARM, x86 playback / simulated inputs, declarative transport."_
+> **Later additions:** C11 (mixed-transport networks) surfaced during Phase F F1 — 2026-05-27.
 
 ## Scope
 
-This document captures the 10-point analysis surfaced when the user asked whether [Phase E](E-robotics-integration.md) as currently written is fit for purpose against real robotics-deployment requirements. The verdict was:
+This document captures the analysis surfaced when the user asked whether [Phase E](E-robotics-integration.md) as currently written is fit for purpose against real robotics-deployment requirements (10 considerations, C1–C10), with one Phase F F1 addition (C11) for the mixed-transport network gap that F1 discovered while authoring `jetson_prod.toml`. The verdict was:
 
 > Phase E as written is **necessary but not sufficient**. It is a deployment-shape phase (systemd units, reference layout, timestamp ADR) — it does not unlock the robotics-integration capabilities the user named.
 
@@ -46,6 +47,8 @@ At that point, walk each consideration, decide close / defer / scope into a new 
 - **C5** Declarative transport gaps (topic registry, per-topic routes, QoS)
 - **C7** Real-time / production knobs (`mlockall`, CPU pinning, SCHED_FIFO)
 - **C10** Module consumption model (`make install` / CMake export vs. vendor-as-submodule)
+- **C11** Mixed-transport networks — fan out a single logical topology across SHM + UDS + UDP peers (today the router is single-transport per instance; surfaced during F1)
+
 
 ---
 
@@ -292,6 +295,87 @@ At that point, walk each consideration, decide close / defer / scope into a new 
 
 ---
 
+### C11 — Mixed-transport networks
+
+**Finding.** The current router architecture is **single-transport per instance**. `RouterServer<T>` is templated on one `Transport`; [`ShmRouterLink::bind_router`](../../ipc/src/router/shm_router_link.hpp) silently skips non-SHM peers in the topology; [`ShmRouterLink::send_to_peer`](../../ipc/src/router/shm_router_link.hpp) **throws** when a route targets a peer it has no channel for. A profile that mixes SHM + UDS peers therefore crashes the forward loop on the first cross-transport route hit. Real deployments want to mix: SHM for the control-loop hot path, UDS for stateful subscribers (recorder, dashboard bridges), UDP for cross-host / HIL — and today they cannot, within one router instance.
+
+**Evidence.**
+
+- Single-transport bind ([ipc/src/router/shm_router_link.hpp](../../ipc/src/router/shm_router_link.hpp) lines ~48–60):
+
+  ```cpp
+  for (size_t i = 0; i < topo_.peer_count; ++i) {
+      const PeerEntry& entry = topo_.peers[i];
+      if (entry.local.kind != PeerAddressKind::ShmRing) {
+          continue;     // <-- non-SHM peers silently skipped
+      }
+      ...
+  }
+  if (peer_channels_.empty()) {
+      throw std::runtime_error("shm router: no shm peers in topology");
+  }
+  ```
+
+- Crash-on-unknown-dest ([ipc/src/router/shm_router_link.hpp](../../ipc/src/router/shm_router_link.hpp) lines ~169–185):
+
+  ```cpp
+  void send_to_peer(uint8_t dest, const Buffer& payload) {
+      for (auto& channel : peer_channels_) { ... }
+      throw std::runtime_error("shm router: no channel for peer id "
+          + std::to_string(dest));
+  }
+  ```
+
+- F1 design realization: the original `jetson_prod.toml` proposal placed recorder (3) and dashboard_feed (8) on UDS while the compute peers used SHM. This would have crashed the router on the first `sensor → [controller, recorder]` forward. The profile was reverted to all-SHM and the limitation captured in [docs/deployment-profiles.md §Known limitations](../../docs/deployment-profiles.md#known-limitations) (commit `3797789`).
+- `DatagramRouterLink<T>` ([ipc/src/router/link.hpp](../../ipc/src/router/link.hpp)) mirrors the same single-transport assumption — its `peer_channels_` are all `T`.
+- TOML schema does **not** validate transport homogeneity ([ipc/src/router/topology_loader.hpp](../../ipc/src/router/topology_loader.hpp) `build_from_`): it happily loads mixed-transport profiles, only failing at runtime when the bind/forward path discovers the mismatch.
+- Adjacent gap: [C5 declarative-transport gaps](#c5--declarative-transport-layer-gaps) covers the routing-side limitations (per-source `RouteRule` with 2-dest cap, no topic registry, no QoS). C11 is the **transport-layer** sibling of C5: routes can't span transports, and that's a separate problem from "routes can't fan out to 3+ destinations."
+
+**Coverage today.** No — single-transport per router instance is a hard architectural constraint, undocumented in [ADR 0001](../../docs/adr/0001-ipc-and-router.md) (which speaks of routing in the abstract) and acknowledged inline only in [docs/deployment-profiles.md](../../docs/deployment-profiles.md) and indirectly in [parked C5](#c5--declarative-transport-layer-gaps). **Why it matters.** Real robotics deployments have **intrinsically heterogeneous** ingress/egress shapes: cameras want SHM for zero-copy; Node dashboards want UDS / WebSocket; HIL benches want UDP; cross-host federation needs UDP. Without mixed-transport support, every cross-transport peer either (a) speaks the router's only transport even when it's wrong for the workload (e.g. Node speaking SHM via a native N-API addon — heavy and fragile), (b) lives in a separate router instance and depends on external glue (factory-bridge approach), or (c) bridges itself in user code (every peer reimplements bridging). F1 had to navigate all three.
+
+**Options.**
+
+1. **Factory-generated bridge daemons between single-transport routers** (the seeded option).
+   - **Concept.** Each transport gets its own `RouterServer<T>` process + profile (`rim-router-shm.toml`, `rim-router-uds.toml`, `rim-router-udp.toml`). A small bridge daemon subscribes to one router as a peer and republishes received frames to another router as a peer. The "factory" piece is a build-time tool that reads a unified **logical topology** (peers, transports, routes) and emits the N per-transport profiles plus the bridge daemons (or a single parameterized bridge binary).
+   - **Pros.** Zero router-internals change — each router stays the simple single-transport machine it is today. Process boundaries align with transport boundaries (good for failure isolation, security sandboxing, systemd unit granularity). Multi-host scales for free: SHM router on Jetson, UDP router on a sim_cloud container, UDS router on a dashboard host — bridge daemons stitch them together over UDS/UDP. Each router stays profile-isolated; per-router debugging is local. Matches the project's existing "process-based separation" philosophy ([ADR 0004](../../docs/adr/0004-robotics-module-boundaries.md)).
+   - **Cons.** Cross-transport frames pay a **two-hop tax**: publisher → router-A → bridge → router-B → subscriber, where today same-transport is one hop. Bridge daemon is a new **stateful** component on what is otherwise a stateless hot path (peer-id ↔ peer-id mapping, per-route state). Route rules are **duplicated** across routers: a logical `sensor → [controller, dashboard]` becomes `[router-shm] sensor → controller, bridge_egress` + `[router-uds] bridge_ingress → dashboard`; without the factory tool keeping them in sync, drift is inevitable. Bridge process count scales as O(transport_pairs) — three transports means three bridges (or one omnidirectional bridge with its own internal routing table). systemd unit footprint roughly triples (router-shm + router-uds + router-udp + bridges + cleanup helpers). Frame `timestamp_ns` either gets **re-stamped at the bridge** (loses original capture time — bad for cross-transport latency measurement) or **preserved** (then the second router's `timestamp_ns = router_now_ns()` overwrite per [ADR 0010](../../docs/adr/0010-router-timestamp-clock.md) must be conditionalized for bridge-sourced frames — special-case logic on the hot path).
+
+2. **Mixed-transport router instance** (heterogeneous links inside one `MixedRouterServer`).
+   - **Concept.** Detemplate `RouterServer<T>` into a non-templated `MixedRouterServer` that holds a heterogeneous collection of links (one `ShmRouterLink`, optionally one `DatagramRouterLink<Uds>`, optionally one `DatagramRouterLink<Udp>`). `peer_channels_` becomes a heterogeneous map keyed by `peer_id` to `(transport_kind, link_index)`. `forward()` polls each link in turn; `send_to_peer(dest)` looks up the dest's `transport_kind` and dispatches to the matching link. `PeerEntry::local.kind` already carries the right tag — the routing layer just needs to use it.
+   - **Pros.** Single forwarding hop regardless of transport mix (latency parity with same-transport). Single process — one TOML, one systemd unit, one set of metrics. Profile authors can mix transports freely (the design that F1 originally implied). Single timestamp source (no re-stamping decision). systemd footprint stays the same. The TOML schema **already** supports mixed transports (the loader accepts them today); only the link layer needs to catch up.
+   - **Cons.** Bigger architectural change — touches [router/link.hpp](../../ipc/src/router/link.hpp), [router/shm_router_link.hpp](../../ipc/src/router/shm_router_link.hpp), the [link_concept](../../ipc/src/router/link_concept.hpp) header that was deliberately scoped to a single-transport API, and every integration test that constructs a router. Heterogeneous polling needs care: `ShmRouterLink::forward` is non-blocking (poll-then-sleep per [ADR 0007](../../docs/adr/0007-router-idle-wake.md)); `DatagramRouterLink::forward` is blocking on `recvfrom()` with `SO_RCVTIMEO`. Either both run in their own threads (per-link thread + a router-level merge step) or the datagram links must be made non-blocking + cooperatively polled (refactor of the UDS/UDP recv path). `bind_router(BindParams)` API needs to port across links (per-link bind params). Metrics need a roll-up across links. Hot-path dispatch becomes a small switch/jump on the `PeerAddressKind` tag (cost negligible in practice but it's not free).
+
+3. **Peer-side dual-protocol bridging** (no router change).
+   - **Concept.** Don't touch the router. For each peer that wants to span transports — recorder, dashboard_feed, anything that needs cross-protocol egress — the **peer itself** becomes a dual-protocol bridge: subscribes to the router on its single transport (SHM on Jetson), re-emits over UDS/HTTP/WebSocket inside the same process. The router never knows about the second protocol.
+   - **Pros.** Zero router changes — smallest blast radius of any option. Encapsulates bridging in the peer that needs it; if no peer needs mixed-transport, no one pays. Each peer chooses its egress protocol freely (recorder may bridge to disk via file IO; dashboard may bridge to UDS or directly to WebSocket; no one is forced into a common protocol).
+   - **Cons.** **Duplicates bridging logic** across every peer that needs it — recorder writes its own SHM-to-disk drain; dashboard writes its own SHM-to-WebSocket drain; future peers each reimplement the SHM-read half. Every non-C++ bridge author must write a SHM-aware client in their language (native N-API addon for Node, `ctypes` wrapper for Python). **Does not help ingress** at all — every publisher peer must speak the router's single transport, so a UDP-only sensor mock cannot publish into a SHM router without an external bridge daemon (which is just Option 1 reinvented for ingress). Hides the topology: an external observer reading `jetson_prod.toml` cannot tell that recorder is also a UDS server — that fact lives only inside the recorder source.
+
+**Variants worth naming for the post-phases walk** (not standalone options, but refinements of the above):
+
+- **1a. SHM-backed inter-router channel** (optimization of Option 1). Replace the bridge daemon with a dedicated SHM ring that both routers tap directly: router A writes outbound frames to `/dev/shm/rim_bridge_shm_to_uds`, router B reads from it as if it were a normal peer. Removes the bridge process at the cost of teaching both routers a "router-as-peer" mode.
+- **1b. Declarative multi-router schema** (refinement of Option 1). Extend TOML with a `[[routers]]` table; routes can target a peer **or** a router-id. A build tool consumes a single logical topology and emits per-router profiles + bridge daemon config. Solves the route-table-drift problem at the cost of a more complex schema and validator.
+- **2a. Polymorphic link interface** (implementation strategy for Option 2). Introduce a virtual `IpcLink` interface that each transport implements; the router holds `std::vector<std::unique_ptr<IpcLink>>`. Cleaner abstraction at the cost of vtable dispatch on the hot path — deliberately avoided in Phase A for that reason. Today's templated single-transport router devirtualizes everything; this gives that back.
+- **4. Kernel-assisted routing** (XDP / io_uring / eBPF). Use Linux kernel primitives to route between transports without a userspace bridge daemon. Linux-specific, large scope, and breaks the header-only consumption model ([parked C10](#c10--module-consumption-model)) — listed only to explicitly close it as out-of-scope for this module.
+
+**Decision rubric for the walk.**
+
+When this consideration is reopened, the choice between Options 1 / 2 / 3 turns on these trade-offs:
+
+| Concern | Favors |
+|---------|--------|
+| Latency budget (cross-transport hot path) | **2** (single hop) > 1 (two hops + bridge) ≈ 3 (depends on peer impl) |
+| Architectural simplicity / staying close to today's code | **3** > 1 > 2 |
+| Operator-facing config simplicity | **2** (one TOML) > 1b (declarative multi-router) > 1 (3 TOMLs + glue) > 3 (config invisible to topology) |
+| Multi-host scaling | **1 / 1b** > 2 (Option 2 is still single-process; cross-host still needs Option 1's bridge pattern) |
+| Failure isolation (one transport's faults don't take down others) | **1 / 1b** > 2 (a bug in `DatagramRouterLink` could crash the whole router) |
+| Bridge-author burden (Python / Node / MAVLink) | **2** (router does the work) > 1 (router does the work) > 3 (every author reimplements SHM reads) |
+
+A reasonable two-stage migration: **Option 2 first** (lands single-host mixed-transport, which unblocks F2/F3 properly and matches the operator mental model F1 documented), then **Option 1b stacked on top of Option 2** when cross-host fanout becomes necessary (multi-host robotics, sim_cloud federation, recorder-on-edge-router patterns). Option 3 is the **bridging-by-fiat fallback** if neither lands and the F2 / F3 sketches need to ship anyway — accept the per-peer duplication.
+
+**Decision deferred.** This consideration was surfaced in F1 (the all-SHM `jetson_prod.toml` is a workaround, not a fix) and intentionally **not** scoped into a Phase F deliverable — F1's plan-text answer "UDS for logger/dashboard_feed" turned out to require this feature, and adding it under F1 would have ballooned the deliverable. Revisit alongside C5 during the post-phases walk; the two share enough surface area that their resolutions should be co-designed.
+
+---
+
 ## Summary matrix
 
 | ID | Consideration | Status today | Phase E/F coverage | Group |
@@ -306,6 +390,7 @@ At that point, walk each consideration, decide close / defer / scope into a new 
 | C8 | Cross-host time sync | `steady_clock` relative ns | E4 (forward-decl only) | 2 |
 | C9 | Camera / GStreamer shape | Docs only | Phase F (F5) | 1 |
 | C10 | Module consumption model | Implicit submodule pattern | Not planned | 3 |
+| C11 | Mixed-transport networks | Single-transport per router (hard) | Not planned; surfaced in F1 | 3 |
 
 ## References
 

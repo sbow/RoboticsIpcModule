@@ -8,8 +8,9 @@
 # on SHM by necessity — the current router architecture binds a single
 # transport per router instance (RouterServer<T> is templated on one
 # Transport; ShmRouterLink iterates ShmRing peers only). A "router that
-# fans out across SHM + UDS in one instance" is the parked C5 declarative-
-# transport gap; until then, IO-side peers either:
+# fans out across SHM + UDS in one instance" is the parked C11 mixed-
+# transport gap (split out from C5 during F1 — see post-phases review);
+# until then, IO-side peers either:
 #   (a) run on the same SHM transport (this profile's choice — works, but
 #       Node.js dashboards need a native SHM addon or a separate UDS bridge
 #       daemon to consume frames), or
@@ -30,14 +31,17 @@
 #   3 recorder       — black-box log; CSV today; subscribe-all via routes
 #   4 vision_capture — metadata frames + sideband (NV12 / JPEG on rim_vision_nv12)         — F5
 #   5 ml_inference   — metadata frames + sideband (tensor in/out on rim_ml_tensor_in/out)  — F5
-#   8 dashboard_feed — Node WebSocket gateway sink (F3)
+#   7 python_tooling — Python bridge (examples/bridges/python_peer/)                       — F2
+#   8 dashboard_feed — Node WebSocket gateway sink                                          — F3
 #
-# Peer IDs 6 (mavlink_gateway) and 7 (python_tooling) are reserved per the
-# 8-peer catalog but not declared here — F4 / F2 will append them.
+# Peer ID 6 (mavlink_gateway) is reserved per the 8-peer catalog but not
+# declared here — F4 will append it.
 #
 # Routes within the 2-destination-per-source cap (RouteRule.dest0/dest1).
 # Dashboard_feed (8) has no inbound route in F1 — see docs/deployment-profiles.md
-# §Dashboard limitation and parked review C5.
+# §Dashboard limitation and parked review C5. python_tooling (7) is reached
+# via the `source = 2 dest = [3, 7]` tap (F2); on Jetson it must use SHM
+# (the Python ctypes bridge today is UDS-only — parked C11).
 #
 # Usage:
 #   ./build/ipc/test/router_server --config config/profiles/jetson_prod.toml
@@ -109,12 +113,19 @@ shm_max_payload = 64
 # log files; dashboard_feed bridges to Node.js WebSocket); they ride SHM
 # here because the current router architecture is single-transport per
 # instance. See docs/deployment-profiles.md §Known limitations and
-# parked review C5 for the deferred mixed-transport story.
+# parked review C11 (Mixed-transport networks) for the deferred story.
 
 [[peers]]
 id              = 3
 name            = "recorder"
 local           = "shm:/rim_router_recorder"
+shm_slot_count  = 256
+shm_max_payload = 64
+
+[[peers]]
+id              = 7
+name            = "python_tooling"
+local           = "shm:/rim_router_python_tooling"
 shm_slot_count  = 256
 shm_max_payload = 64
 
@@ -132,8 +143,8 @@ source = 1                            # sensor   → controller + recorder
 dest   = [2, 3]
 
 [[routes]]
-source = 2                            # controller → recorder
-dest   = [3]
+source = 2                            # controller → recorder + python_tooling
+dest   = [3, 7]
 
 [[routes]]
 source = 4                            # vision_capture → ml_inference + recorder
@@ -142,3 +153,7 @@ dest   = [5, 3]
 [[routes]]
 source = 5                            # ml_inference   → controller + recorder
 dest   = [2, 3]
+
+[[routes]]
+source = 7                            # python_tooling → recorder
+dest   = [3]

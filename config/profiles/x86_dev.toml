@@ -19,13 +19,15 @@
 # Peer catalog (SYSTEM-VISION.md + docs/robotics-reference-layout.md):
 #   1 sensor / 2 controller / 3 recorder — demo binaries today
 #   4 vision_capture / 5 ml_inference / 8 dashboard_feed — Phase F sketches
+#   7 python_tooling — Phase F F2 (examples/bridges/python_peer/)
 #
-# Peer IDs 6 (mavlink_gateway) and 7 (python_tooling) are reserved per the
-# 8-peer catalog but not declared here — F4 / F2 will append them.
+# Peer ID 6 (mavlink_gateway) is reserved per the 8-peer catalog but not
+# declared here — F4 will append it.
 #
 # Routes within the 2-destination-per-source cap (RouteRule.dest0/dest1).
 # Dashboard_feed (8) has no inbound route in F1 — see docs/deployment-profiles.md
-# §Dashboard limitation and parked review C5.
+# §Dashboard limitation and parked review C5. python_tooling (7) is reached
+# via the `source = 2 dest = [3, 7]` tap (F2).
 #
 # Usage:
 #   ./build/ipc/test/router_server --config config/profiles/x86_dev.toml
@@ -63,6 +65,11 @@ name  = "ml_inference"
 local = "uds:/tmp/rim_router_ml_inference.sock"
 
 [[peers]]
+id    = 7
+name  = "python_tooling"
+local = "uds:/tmp/rim_router_python_tooling.sock"
+
+[[peers]]
 id    = 8
 name  = "dashboard_feed"
 local = "uds:/tmp/rim_router_dashboard.sock"
@@ -74,8 +81,8 @@ source = 1                            # sensor   → controller + recorder
 dest   = [2, 3]
 
 [[routes]]
-source = 2                            # controller → recorder
-dest   = [3]
+source = 2                            # controller → recorder + python_tooling
+dest   = [3, 7]
 
 [[routes]]
 source = 4                            # vision_capture → ml_inference + recorder
@@ -84,3 +91,7 @@ dest   = [5, 3]
 [[routes]]
 source = 5                            # ml_inference   → controller + recorder
 dest   = [2, 3]
+
+[[routes]]
+source = 7                            # python_tooling → recorder
+dest   = [3]

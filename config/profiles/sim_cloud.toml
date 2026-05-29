@@ -11,14 +11,15 @@
 # Peer catalog (SYSTEM-VISION.md + docs/robotics-reference-layout.md):
 #   1 sensor / 2 controller / 3 recorder — demo binaries (mocks in cloud sim)
 #   4 vision_capture / 5 ml_inference / 8 dashboard_feed — Phase F sketches
+#   7 python_tooling — Phase F F2 (examples/bridges/python_peer/)
 #
-# Peer IDs 6 (mavlink_gateway) and 7 (python_tooling) are reserved per the
-# 8-peer catalog. Container addresses 10.0.0.7 / 10.0.0.8 (port 19206 / 19207)
-# remain free for F4 / F2 to slot in.
+# Peer ID 6 (mavlink_gateway) is reserved per the 8-peer catalog. Container
+# address 10.0.0.7 (port 19206) remains free for F4 to slot in.
 #
 # Routes within the 2-destination-per-source cap (RouteRule.dest0/dest1).
 # Dashboard_feed (8) has no inbound route in F1 — see docs/deployment-profiles.md
-# §Dashboard limitation and parked review C5.
+# §Dashboard limitation and parked review C5. python_tooling (7) is reached
+# via the `source = 2 dest = [3, 7]` tap (F2).
 #
 # Usage:
 #   ./build/ipc/test/router_server --config config/profiles/sim_cloud.toml
@@ -54,8 +55,12 @@ id    = 5
 name  = "ml_inference"
 local = "udp:10.0.0.6:19205"
 
-# Addresses 10.0.0.7 / 10.0.0.8 reserved for peers 6 (mavlink_gateway)
-# / 7 (python_tooling).
+# Address 10.0.0.7 (port 19206) reserved for peer 6 (mavlink_gateway).
+
+[[peers]]
+id    = 7
+name  = "python_tooling"
+local = "udp:10.0.0.8:19207"
 
 [[peers]]
 id    = 8
@@ -69,8 +74,8 @@ source = 1                            # sensor   → controller + recorder
 dest   = [2, 3]
 
 [[routes]]
-source = 2                            # controller → recorder
-dest   = [3]
+source = 2                            # controller → recorder + python_tooling
+dest   = [3, 7]
 
 [[routes]]
 source = 4                            # vision_capture → ml_inference + recorder
@@ -79,3 +84,7 @@ dest   = [5, 3]
 [[routes]]
 source = 5                            # ml_inference   → controller + recorder
 dest   = [2, 3]
+
+[[routes]]
+source = 7                            # python_tooling → recorder
+dest   = [3]

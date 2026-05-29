@@ -375,12 +375,13 @@ server against any of them:
 ```
 
 Phase F F1 expanded each profile to **six peers** (1 sensor, 2 controller,
-3 recorder, 4 vision_capture, 5 ml_inference, 8 dashboard_feed) so the
-files match the [8-peer catalog](../robotics-ipc-module/SYSTEM-VISION.md#peer-catalog-illustrative)
-1:1 (peers 6 mavlink_gateway and 7 python_tooling land with F4 / F2).
-Same peer IDs and route rules across profiles — only addresses and
-transport kind change. See [docs/deployment-profiles.md](../docs/deployment-profiles.md)
-for the operator-facing selector + per-profile shape + the two known
+3 recorder, 4 vision_capture, 5 ml_inference, 8 dashboard_feed); F2 added
+**peer 7** (`python_tooling`) so the profiles now match the
+[8-peer catalog](../robotics-ipc-module/SYSTEM-VISION.md#peer-catalog-illustrative)
+modulo peer 6 (mavlink_gateway, reserved for F4). Same peer IDs and route
+rules across profiles — only addresses and transport kind change. See
+[docs/deployment-profiles.md](../docs/deployment-profiles.md) for the
+operator-facing selector + per-profile shape + the two known
 limitations (single-transport-per-router and 2-destination cap, both
 cross-referenced to parked review C5). See [SYSTEM-VISION.md](../robotics-ipc-module/SYSTEM-VISION.md)
 for the
@@ -552,7 +553,8 @@ UDS rebind after stale socket) and a TOML loader fault path
 - [SYSTEM-VISION.md](../robotics-ipc-module/SYSTEM-VISION.md) — deployment targets and peer catalog
 - [docs/robotics-reference-layout.md](../docs/robotics-reference-layout.md) — Phase E reference layout: peer catalog, per-deployment shapes (Jetson / x86 / HIL / sim), integration patterns, forward references
 - [robotics-ipc-module/deploy/systemd/README.md](../robotics-ipc-module/deploy/systemd/README.md) — Phase E systemd unit examples: `rim-router.service`, `rim-peer@.service` template, `ExecStopPost` cleanup, install + customization + hardening notes
-- [examples/bridges/README.md](../examples/bridges/README.md) — Phase E E3 scaffolding for Phase F bridges (`python_peer`, `node_gateway`, `mavlink_gateway`, `vision_peer`); each subdirectory has a stub README pointing at its F2 – F5 deliverable
+- [examples/bridges/README.md](../examples/bridges/README.md) — Phase E E3 scaffolding for Phase F bridges (`python_peer` [implemented in F2], `node_gateway` [F3 sketch], `mavlink_gateway` [F4 sketch], `vision_peer` [F5 sketch])
+- [examples/bridges/python_peer/](../examples/bridges/python_peer/) — Phase F F2 reference bridge; ctypes port of `RouterFrame` v2 + UDS subscriber/publisher + self-terminating smoke (`Python -> C++ router -> Python` round-trip with byte-exact payload comparison)
 - [docs/adr/0001-ipc-and-router.md](../docs/adr/0001-ipc-and-router.md) — original header-only IPC + router decision
 - [docs/adr/0002-ipc-router-refactor.md](../docs/adr/0002-ipc-router-refactor.md) — layered split (transport / link / node / app)
 - [docs/adr/0003-transport-agnostic-router.md](../docs/adr/0003-transport-agnostic-router.md) — peer-address adapters + factories

@@ -66,6 +66,7 @@ const char* const kShmNames[] = {
     "/rim_router_recorder",
     "/rim_router_vision_capture",
     "/rim_router_ml_inference",
+    "/rim_router_python_tooling",
     "/rim_router_dashboard",
 };
 

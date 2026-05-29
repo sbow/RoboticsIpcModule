@@ -8,7 +8,7 @@ This directory holds **bridge processes** that interoperate with the C++ router 
 
 | Directory | Peer ID | Bridge | Status | Phase F deliverable |
 |-----------|---------|--------|--------|---------------------|
-| [`python_peer/`](python_peer/) | 7 | Python subscriber/publisher matching the v2 frame layout | **Sketch only** | F2 |
+| [`python_peer/`](python_peer/) | 7 | Python subscriber/publisher matching the v2 frame layout (UDS, ctypes) | **Implemented** | F2 |
 | [`node_gateway/`](node_gateway/) | 8 | UDS → WebSocket gateway for browser dashboards | **Sketch only** | F3 |
 | [`mavlink_gateway/`](mavlink_gateway/) | 6 | Serial / MAVLink ↔ router status frames | **Sketch only** | F4 |
 | [`vision_peer/`](vision_peer/) | 4 | CSI / V4L2 vision metadata + sideband NV12 / JPEG | **Sketch only** | F5 |
@@ -29,8 +29,8 @@ Bridges are clients of the router server, using one of the transports the router
 
 | Deployment | Bridge transport | Resource path / port |
 |------------|------------------|----------------------|
-| x86 dev | UDS | `/tmp/rim_router.sock` |
-| Jetson on-robot | SHM | `/dev/shm/rim_router_<peer>` (all 6 F1 peers on SHM — see [docs/deployment-profiles.md §Known limitations](../../docs/deployment-profiles.md#known-limitations) for why Node-style bridges currently need a native SHM addon or a separate UDS bridge daemon) |
+| x86 dev | UDS | `/tmp/rim_router.sock` (`python_peer` is wire-tested here — see [`python_peer/`](python_peer/)) |
+| Jetson on-robot | SHM | `/dev/shm/rim_router_<peer>` (all 7 F1+F2 peers on SHM — see [docs/deployment-profiles.md §Known limitations](../../docs/deployment-profiles.md#known-limitations) for why Node-style and Python-style bridges currently need a native SHM addon or a separate UDS bridge daemon) |
 | HIL bench | UDP loopback | `127.0.0.1:19100` (ports 19101–19108 per peer; see [hil.toml](../../config/profiles/hil.toml)) |
 | Sim / CI cloud | UDP | container subnet per `sim_cloud.toml` |
 

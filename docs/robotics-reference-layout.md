@@ -29,7 +29,7 @@ This is a **deployment-shape document**. It documents the contract surface (peer
 | Python / Node / MAVLink bridge code | Phase F F2–F4 |
 | Vision peer + camera capture code | Phase F F5 |
 | Sideband `memory_class` (CUDA / NvBufSurface) parsing | Phase F (forward-declared in [ADR 0008](adr/0008-router-frame-v2.md)) |
-| TensorRT contract beyond peer-catalog level, replay/sim peer, declarative-transport extensions (topic registry / per-topic routes / QoS), RT pinning / `mlockall`, aarch64 CI dimension, `make install` / CMake export | Open backlog — see [plans/post-phases-robotics-review.md](../robotics-ipc-module/plans/post-phases-robotics-review.md) (considerations C1–C10) |
+| TensorRT contract beyond peer-catalog level, replay/sim peer, declarative-transport extensions (topic registry / per-topic routes / QoS), mixed-transport networks (SHM + UDS + UDP from one router), RT pinning / `mlockall`, aarch64 CI dimension, `make install` / CMake export | Open backlog — see [plans/post-phases-robotics-review.md](../robotics-ipc-module/plans/post-phases-robotics-review.md) (considerations C1–C11) |
 
 ## Peer catalog
 
@@ -43,7 +43,7 @@ Peer IDs are byte-valued (1–255) and stable across deployment profiles per the
 | 4 | `vision_capture` | CSI/V4L camera pipeline | metadata only (`topic_id`, `seq`, `timestamp_ns`, sideband descriptor) | NV12 / JPEG via SHM region | **Sketch only** — Phase F F5 |
 | 5 | `ml_inference` | CUDA inference (e.g. TensorRT) | metadata + tensor descriptor | input + output tensors via SHM region | **Sketch only** — Phase F F5; CUDA-class sidebands deferred to Phase F |
 | 6 | `mavlink_gateway` | MCU bridge over serial | compact status frames (mode, attitude, ack) | none | **Sketch only** — Phase F F4 |
-| 7 | `python_tooling` | Training / scripts; offline batch | matches v2 frame layout via ctypes | optional | **Sketch only** — Phase F F2 |
+| 7 | `python_tooling` | Training / scripts; offline batch | matches v2 frame layout via ctypes | optional | **Implemented** — Phase F F2 ([`examples/bridges/python_peer/`](../examples/bridges/python_peer/)) |
 | 8 | `dashboard_feed` | Node UDS → WebSocket gateway | reads everything; forwards to browser | none | **Sketch only** — Phase F F3 |
 
 **Frame layout** (64 B, host little-endian) per [ADR 0008](adr/0008-router-frame-v2.md):
@@ -221,9 +221,9 @@ Today only `name` / `max_payload_bytes` / optional `version` are parsed; `class`
 
 ### Python bridge (`python_tooling`, peer 7)
 
-**Status:** sketch only — stub at [`examples/bridges/python_peer/`](../examples/bridges/python_peer/); implementation lands in [F2](../robotics-ipc-module/plans/F-interoperability-bridges.md#f2--python-bridge-example).
+**Status:** implemented — [`examples/bridges/python_peer/`](../examples/bridges/python_peer/) ships a UDS subscriber + publisher using `ctypes.LittleEndianStructure` to mirror the 64 B [ADR 0008](adr/0008-router-frame-v2.md) frame layout byte-for-byte. End-to-end wire compatibility is verified by [`smoke.sh`](../examples/bridges/python_peer/smoke.sh) (Python publisher → C++ router → Python subscriber with byte-exact payload comparison).
 
-**Process shape.** Standalone Python process (any interpreter). Connects to the router on UDS (recommended on x86 dev) or UDP (HIL / cloud). Matches the [ADR 0008](adr/0008-router-frame-v2.md) frame layout via `ctypes.Structure` or `struct.pack`. **Do not** embed CPython in `libipc` — header-only C++ keeps the boundary clean ([ADR 0004](adr/0004-robotics-module-boundaries.md)).
+**Process shape.** Standalone Python process (any interpreter, stdlib-only — no third-party deps). Connects to the router on UDS (recommended on x86 dev) or UDP (HIL / cloud — UDP variant not in F2 deliverable; trivial extension by switching the socket family in [`rim_router_peer.py`](../examples/bridges/python_peer/rim_router_peer.py)). The router resolves the source peer from the sender's bound socket path, so the Python peer **must** `bind()` at the peer-7 path declared in the profile before sending — see the [bridge README](../examples/bridges/python_peer/README.md#how-the-router-identifies-a-python-peer) for the details and the Phase D4 `recv_unknown_source` counter that catches misconfiguration. **Do not** embed CPython in `libipc` — header-only C++ keeps the boundary clean ([ADR 0004](adr/0004-robotics-module-boundaries.md)).
 
 ### Node dashboard gateway (`dashboard_feed`, peer 8)
 
