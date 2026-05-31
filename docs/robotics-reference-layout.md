@@ -29,7 +29,7 @@ This is a **deployment-shape document**. It documents the contract surface (peer
 | Python / Node / MAVLink bridge code | Phase F F2–F4 |
 | Vision peer + camera capture code | Phase F F5 |
 | Sideband `memory_class` (CUDA / NvBufSurface) parsing | Phase F (forward-declared in [ADR 0008](adr/0008-router-frame-v2.md)) |
-| TensorRT contract beyond peer-catalog level, replay/sim peer, declarative-transport extensions (per-topic routes / priority-aware QoS — C5 Scopes C + D), mixed-transport networks (SHM + UDS + UDP from one router), RT pinning / `mlockall`, aarch64 CI dimension, `make install` / CMake export | Open backlog — see [plans/post-phases-robotics-review.md](../robotics-ipc-module/plans/post-phases-robotics-review.md) (considerations C1–C11; C5 Scopes A + B closed 2026-05-28 — 2-destination cap lifted to `kMaxRouteDests = 8`, declarative `[[topics]]` registry shipped) |
+| TensorRT contract beyond peer-catalog level, replay/sim peer, declarative-transport extensions (per-topic routes — promoted to Phase G; priority-aware QoS — merged into C7), mixed-transport networks (SHM + UDS + UDP from one router), RT pinning / `mlockall`, aarch64 CI dimension, `make install` / CMake export | Open backlog — see [plans/post-phases-robotics-review.md](../robotics-ipc-module/plans/post-phases-robotics-review.md) (considerations C1–C11; C5 Scopes A + B closed 2026-05-28; C5 Scope C promoted to [Phase G](../robotics-ipc-module/plans/G-declarative-routing.md) and Scope D merged into C7 on 2026-05-30) |
 
 ## Peer catalog
 
@@ -195,7 +195,7 @@ Today only `name` / `max_payload_bytes` / optional `version` are parsed; `class`
 - Runs inference.
 - Publishes a result `RouterFrame` with inline metadata (class id, confidence, latency_ns) and writes the full output tensor into a separate sideband region (`ml_tensor_out`).
 
-**Contract on RouterFrame fields:** same as `vision_capture` but `source = 5` and `topic_id` distinguishes input vs output streams. Subscribers route by `source` today (per-source routing); the optional `[[topics]]` registry added by [closed C5 Scope B](../robotics-ipc-module/plans/post-phases-robotics-review.md#closure--scope-b-declarative-topic-registry-2026-05-28) lets bridges validate `topic_id` against a declared name + payload class, but does **not** drive dispatch yet — per-topic routing remains parked as Scope C.
+**Contract on RouterFrame fields:** same as `vision_capture` but `source = 5` and `topic_id` distinguishes input vs output streams. Subscribers route by `source` today (per-source routing); the optional `[[topics]]` registry added by [closed C5 Scope B](../robotics-ipc-module/plans/post-phases-robotics-review.md#closure--scope-b-declarative-topic-registry-2026-05-28) lets bridges validate `topic_id` against a declared name + payload class, but does **not** drive dispatch yet — per-topic routing is the deliverable of [Phase G — Declarative routing](../robotics-ipc-module/plans/G-declarative-routing.md) (formerly C5 Scope C, promoted 2026-05-30).
 
 ### MAVLink gateway (`mavlink_gateway`, peer 6)
 

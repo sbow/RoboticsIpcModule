@@ -4,7 +4,8 @@
 > **Source:** chat analysis dated 2026-05-26 ([Phase E fit-for-purpose review](f325cb57-00db-4d4e-a19c-2c45473839d1))
 > **Trigger question:** _"Analyze Phase E — is it fit for purpose? Consider TensorRT, CUDA, ARM, x86 playback / simulated inputs, declarative transport."_
 > **Later additions:** C11 (mixed-transport networks) surfaced during Phase F F1 — 2026-05-27.
-> **Partial closures:** **C5 Scopes A + B** closed early during Phase F (2026-05-28) — 2-destination cap lifted to `kMaxRouteDests = 8`; declarative `[[topics]]` registry added. C5 Scopes C (per-topic routing) and D (priority-aware QoS) remain parked. See the C5 entry below for the closure notes.
+> **Partial closures:** **C5 Scopes A + B** closed early during Phase F (2026-05-28) — 2-destination cap lifted to `kMaxRouteDests = 8`; declarative `[[topics]]` registry added. See the C5 entry for the closure notes.
+> **Re-classifications (2026-05-30):** **C5 Scope C (per-topic routing)** promoted to its own phase plan — see [Phase G — Declarative routing](G-declarative-routing.md). **C5 Scope D (priority-aware QoS)** merged into [C7 — Real-time / production knobs](#c7--real-time--production-knobs-mlockall-cpu-pinning-sched_fifo) because both Scope D and C7 are latency-under-contention problems and share the same systemd-directives surface; see C7 §Options for the merged scope.
 
 ## Scope
 
@@ -45,8 +46,8 @@ At that point, walk each consideration, decide close / defer / scope into a new 
 
 - **C3** ARM / aarch64 verification
 - **C4** Playback / simulation testing on x86
-- **C5** Declarative transport gaps (topic registry, per-topic routes, QoS)
-- **C7** Real-time / production knobs (`mlockall`, CPU pinning, SCHED_FIFO)
+- **C5** Declarative transport gaps — Scopes A + B closed 2026-05-28; Scope C promoted to [Phase G](G-declarative-routing.md) 2026-05-30; Scope D merged into C7 below
+- **C7** Real-time / production knobs (`mlockall`, CPU pinning, SCHED_FIFO) — now also covers priority-aware QoS (former C5 Scope D)
 - **C10** Module consumption model (`make install` / CMake export vs. vendor-as-submodule)
 - **C11** Mixed-transport networks — fan out a single logical topology across SHM + UDS + UDP peers (today the router is single-transport per instance; surfaced during F1)
 
@@ -205,12 +206,14 @@ At that point, walk each consideration, decide close / defer / scope into a new 
 
 **Tests.** New `ipc/test/topic_registry_test.cpp` (42 assertions): absent-section yields empty view, three-topic round-trip, lookup by id and by name, id=0 is legal, move-stable interned pointers, and seven loader-error cases (missing id, missing name, empty name, u16-overflow id, duplicate id, duplicate name, out-of-range `sideband_idx`, empty `payload_class`).
 
-#### Still parked
+#### Re-classifications (2026-05-30)
 
-- **Scope C — per-topic routing.** Changes `RouteRule` semantics so the route table can dispatch on `(source, topic_id)` pairs instead of just `source`. Requires either a second rule shape (`TopicRule`) or a (source, topic) compound key in the existing table. Reopen alongside `examples/bridges/` work that needs per-topic separation (recorder filtering, dashboard subscription patterns).
-- **Scope D — priority-aware QoS.** Have `ShmRouterLink::forward` / `DatagramRouterLink::forward` consult the 3-bit `priority` field in `frame.flags` and either drop low-priority frames first on backpressure or drain a priority queue. Touches `ShmRouterMetrics::dropped_full_per_peer` accounting.
+After the Scope A + B closure landed, the two remaining sub-scopes were re-evaluated against the "is this close-out work or is it a phase?" test. The answer was different for each:
 
-Both deferred per "smallest-practical-close first" — the Scope A + B delivery is already enough to (i) close the F1 dashboard limitation and (ii) unblock bridge-side validation of `topic_id` semantics, which were the two concrete asks that surfaced during Phase F.
+- **Scope C — per-topic routing → promoted to [Phase G — Declarative routing](G-declarative-routing.md).** Changing `RouteRule` semantics so the route table dispatches on `(source, topic_id)` pairs instead of just `source` is **not** close-out work: it changes the router's dispatch primitive, the wire-facing TOML schema (`[[routes]]` gains a `topic` selector), every shipped profile, and the integration-test surface. It also needs a new ADR (the dispatch-key change is an architectural commitment, not an implementation refinement). That is phase-shaped work, not a sub-scope. See the new plan file for the full deliverable list (G1 ADR, G2 `RouteRule` surgery, G3 loader, G4 profiles, G5 tests rebuilt, G6 docs) and the principle that source-only routes continue to load without modification (backward-compatible TOML surface, opt-in per rule).
+- **Scope D — priority-aware QoS → merged into [C7 — Real-time / production knobs](#c7--real-time--production-knobs-mlockall-cpu-pinning-sched_fifo).** Priority-aware drain order and `SCHED_FIFO` / `MemoryLock` / `CPUAffinity` solve the same problem domain (latency under contention), share the same hot path (`ShmRouterLink::forward` + `DatagramRouterLink::forward`), and share the same systemd-directives surface in Phase E's unit files. They also share a failure mode: both manifest as p99 latency drift under load, not as a config-shape problem. Bundling them keeps the "what does it take to make this thing real-time-safe?" conversation in one place. See C7 §Options for the merged scope.
+
+The Scope A + B delivery was already enough to (i) close the F1 dashboard limitation and (ii) unblock bridge-side validation of `topic_id` semantics, which were the two concrete asks that surfaced during Phase F. With Scope C promoted and Scope D merged, the C5 entry has no remaining parked sub-scopes; both follow-on items now have an owning plan (Phase G for dispatch, C7 for QoS).
 
 ---
 
@@ -234,22 +237,30 @@ Both deferred per "smallest-practical-close first" — the Scope A + B delivery 
 
 ---
 
-### C7 — Real-time / production knobs (`mlockall`, CPU pinning, SCHED_FIFO)
+### C7 — Real-time / production knobs (`mlockall`, CPU pinning, SCHED_FIFO, priority-aware QoS)
 
-**Finding.** Zero hits for `mlockall`, `sched_setaffinity`, `SCHED_FIFO`, `LimitRTPRIO`, `MemoryLock`, `CPUAffinity`, `Nice=`, `pthread_setaffinity_np`. The Phase E plan does not list these as targets.
+> **Scope absorbed 2026-05-30.** This entry was extended to cover priority-aware QoS (formerly C5 Scope D). See §Options 4 below for the merged sub-scope and the reasoning.
+
+**Finding.** Zero hits for `mlockall`, `sched_setaffinity`, `SCHED_FIFO`, `LimitRTPRIO`, `MemoryLock`, `CPUAffinity`, `Nice=`, `pthread_setaffinity_np`. The Phase E plan does not list these as targets. The 3-bit `priority` field in `RouterFrame::flags` (ADR 0008) is also today purely advisory — `ShmRouterLink::forward` and `DatagramRouterLink::forward` never inspect it.
 
 **Evidence.**
 
 - [ipc/test/router_server.cpp](../../ipc/test/router_server.cpp) — default scheduler, paged memory, 200 ms poll timeout, 1 ms idle sleep ([ADR 0007](../../docs/adr/0007-router-idle-wake.md)). No init hook for hardening.
 - [robotics-ipc-module/plans/E-robotics-integration.md](E-robotics-integration.md) — no mention of `mlockall` / `CPUAffinity` / RT scheduling.
+- [ipc/src/router/shm_router_link.hpp](../../ipc/src/router/shm_router_link.hpp) `forward` — drops on ring-full regardless of `frame.flags & kPriorityMask`; no priority-aware drain order in `ShmRouterMetrics::dropped_full_per_peer` accounting.
 
-**Coverage today.** No. **Why it matters.** Robotics control loops typically pin the IPC hot path to an isolated core with `mlockall` + `SCHED_FIFO` to avoid page-fault and preemption jitter. Without an opt-in path, downstream users must patch.
+**Coverage today.** No. **Why it matters.** Robotics control loops typically pin the IPC hot path to an isolated core with `mlockall` + `SCHED_FIFO` to avoid page-fault and preemption jitter. Without an opt-in path, downstream users must patch. Priority-aware QoS belongs in the same conversation: both problems are **latency under contention**, share the same hot path (`forward()` in both link types), and share the same systemd-directives surface in Phase E's unit files. Solving one without the other still produces p99 drift on the wrong frames.
 
 **Options.**
 
 1. Add an opt-in init hook in `router_app.h` (`router_lock_memory()`, `router_pin_to_core(int)`) + a documented `[Service]` snippet (`MemoryLock=infinity`, `CPUAffinity=2`, `LimitRTPRIO=80`) in the Phase E2 unit files.
 2. Treat as user responsibility — document the recommended systemd directives in E1 only; no code changes.
-3. Promote into a new Phase G "production hardening" deliverable.
+3. Promote into a new "production hardening" phase plan (working name; phase letter to be picked when the work is scheduled — Phase G is already taken by declarative routing, so this would be Phase H or later).
+4. **Priority-aware QoS sub-scope (merged from former C5 Scope D, 2026-05-30).** Have `ShmRouterLink::forward` / `DatagramRouterLink::forward` consult the 3-bit `priority` field in `frame.flags` and either drop low-priority frames first on backpressure or drain a priority queue. Touches `ShmRouterMetrics::dropped_full_per_peer` accounting (needs per-priority bucket counters). Belongs here because:
+   - **Shared problem domain.** Priority-aware drain and `SCHED_FIFO` / `mlockall` are both about behavior under contention. Bundling them lets a single design pass settle the question "what is the contract for latency under load?"
+   - **Shared hot path.** Both edits land in `forward()` on both link types. Splitting them across two phases would touch the same code twice.
+   - **Shared systemd surface.** A production unit that wants priority-aware QoS also wants `MemoryLock=infinity` + `CPUAffinity` + `LimitRTPRIO=80` — they are configured at the same level and tested with the same load generators.
+   - **Shared failure signature.** Both manifest as p99 latency drift under load, not as a config-shape problem. The Phase G boundary (config-shape work) explicitly excludes this — see [G-declarative-routing.md §Out of scope](G-declarative-routing.md#out-of-scope-still-parked-or-moved-elsewhere).
 
 ---
 

@@ -171,7 +171,7 @@ Trade-offs the operator should know about:
 
 - **`make_route(source, d0, d1, …)`** is a constexpr factory in [`routing.hpp`](../ipc/src/router/routing.hpp) that deduces `dest_count` and rejects >`kMaxRouteDests` arguments at compile time. The TOML loader applies the same bound at load time and additionally rejects duplicate destinations within a rule and self-routing.
 - **Trailing-destination convention.** When a rule lists `dashboard_feed` (or any optional bridge peer) at the **end** of its dest array, the rule preserves pre-Scope-A delivery order for the destinations it had before. Bridges that may not be running (Node dashboard, Python tooling) belong at the tail.
-- **Per-destination failure isolation is still a datagram-link limitation.** On UDS, `sendto` to a non-listening peer throws; the throw bubbles out of `forward()` after earlier destinations in the same fan-out have already received the frame. Per-destination resilience is its own concern, parked alongside C5 Scope C.
+- **Per-destination failure isolation is still a datagram-link limitation.** On UDS, `sendto` to a non-listening peer throws; the throw bubbles out of `forward()` after earlier destinations in the same fan-out have already received the frame. Per-destination resilience is its own concern, parked alongside [Phase G — Declarative routing](../robotics-ipc-module/plans/G-declarative-routing.md) (which can sidestep the symptom by routing only the topics each destination actually subscribes to).
 
 See the closure notes in [parked review C5 §Closure — Scope A](../robotics-ipc-module/plans/post-phases-robotics-review.md#closure--scope-a-lift-the-2-destination-cap-2026-05-28).
 
@@ -179,7 +179,7 @@ See the closure notes in [parked review C5 §Closure — Scope A](../robotics-ip
 
 > Historical note. F1 declared peer 8 (`dashboard_feed`) for catalog completeness but the 2-destination cap left it with no inbound route in any profile.
 
-With C5 Scope A landed, every compute-side rule now lists `dashboard_feed` as a trailing destination, so the F3 Node gateway sketch under [`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/) can subscribe to the full system view without bridges editing the route table per deployment. On Jetson (SHM) an idle dashboard ring fills then drops as backpressure; on UDS / UDP an idle dashboard receiver causes per-destination failures that the datagram link does not yet isolate from earlier destinations in the same fan-out (parked alongside C5 Scope C).
+With C5 Scope A landed, every compute-side rule now lists `dashboard_feed` as a trailing destination, so the F3 Node gateway sketch under [`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/) can subscribe to the full system view without bridges editing the route table per deployment. On Jetson (SHM) an idle dashboard ring fills then drops as backpressure; on UDS / UDP an idle dashboard receiver causes per-destination failures that the datagram link does not yet isolate from earlier destinations in the same fan-out (parked alongside [Phase G — Declarative routing](../robotics-ipc-module/plans/G-declarative-routing.md), which can sidestep the symptom by giving dashboard a per-topic route instead of a tap on every rule).
 
 ### Peer 6 absent
 
@@ -228,7 +228,7 @@ Schema rules (enforced by [`topology_loader.hpp`](../ipc/src/router/topology_loa
 | `payload_class` | string | no | non-empty if present, ≤ 63 bytes; free-form (no whitelist) |
 | `sideband_idx` | u16 | no | 0..65535; defaults to `kSidebandIdxNone` (0xFFFF) — matches the `RouterFrame` default for "no sideband" |
 
-Consumer-side helpers live in [`router/topic_table.hpp`](../ipc/src/router/topic_table.hpp): `topic_by_id(topo, 100)`, `topic_by_name(topo, "imu_proprio")`. A `RouterTopology` with no `[[topics]]` declared has `topic_count == 0`; lookups against an empty registry return `nullptr` (safe). Scope C — promoting topics from a documented catalog to an actual dispatch key in `RouteRule` — is still parked.
+Consumer-side helpers live in [`router/topic_table.hpp`](../ipc/src/router/topic_table.hpp): `topic_by_id(topo, 100)`, `topic_by_name(topo, "imu_proprio")`. A `RouterTopology` with no `[[topics]]` declared has `topic_count == 0`; lookups against an empty registry return `nullptr` (safe). Promoting topics from a documented catalog to an actual dispatch key in `RouteRule` (formerly C5 Scope C) is now planned as a separate phase — see [Phase G — Declarative routing](../robotics-ipc-module/plans/G-declarative-routing.md).
 
 ## Operator hand-off checklist
 
@@ -259,7 +259,8 @@ When deploying to a new host:
 | Vision + ML sideband `memory_class` parsing | Phase F F5; stub [`examples/bridges/vision_peer/`](../examples/bridges/vision_peer/) |
 | Mixed-transport router fanout (SHM + UDS + UDP from one router) | Parked review C11 — three options (factory bridge daemons / mixed-transport router / peer-side bridging) + decision rubric |
 | 2-destination cap, topic registry | **Closed 2026-05-28** — C5 Scopes A + B; see [§Topic registry](#topic-registry-optional) above and [parked review C5](../robotics-ipc-module/plans/post-phases-robotics-review.md#c5--declarative-transport-layer-gaps) |
-| Per-topic routing, priority-aware QoS | Parked review C5 Scopes C + D (still parked) |
+| Per-topic routing | **Planned (Phase G)** — former C5 Scope C promoted 2026-05-30. New ADR + `RouteRule` surgery + all profiles touched + integration tests rebuilt. See [robotics-ipc-module/plans/G-declarative-routing.md](../robotics-ipc-module/plans/G-declarative-routing.md) |
+| Priority-aware QoS | **Parked (C7)** — former C5 Scope D merged into [C7 — Real-time / production knobs](../robotics-ipc-module/plans/post-phases-robotics-review.md#c7--real-time--production-knobs-mlockall-cpu-pinning-sched_fifo-priority-aware-qos) 2026-05-30 (latency-under-contention belongs with RT pinning, not with declarative routing) |
 | Replay-grade recorder | Parked review C4 (replay needs a richer log format than today's CSV) |
 | TensorRT contract depth, CUDA memory_class, ARM CI, RT pinning, cross-host time, camera shape, consumption model | Parked review C1–C10 — see [plans/post-phases-robotics-review.md](../robotics-ipc-module/plans/post-phases-robotics-review.md) |
 
