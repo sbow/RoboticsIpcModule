@@ -22,7 +22,17 @@
 //
 //   [[routes]]
 //   source = 1
-//   dest   = [2, 3]                     # 1 or 2 destinations
+//   dest   = [2, 3, 8]                  # 1..kMaxRouteDests destinations
+//                                        # (C5 Scope A lifted the prior 2-dest cap)
+//
+//   [[topics]]                          # Phase F C5 Scope B, optional
+//   id            = 100                 # uint16, required, unique
+//   name          = "imu_proprio"       # required, <= 63 bytes
+//   payload_class = "imu_proprio"       # optional, free-form, <= 63 bytes
+//   sideband_idx  = 0                   # optional uint16, default kSidebandIdxNone
+//
+//   Topics are declarative only — the router does not consult the
+//   registry; bridges and tooling use it to validate published frames.
 //
 // Layering: this header lives inside ipc/src/router/ but is NOT pulled in by
 // router_protocol.hpp on purpose — apps that don't want the TOML dependency
@@ -43,6 +53,7 @@
 #include "router/peer_table.hpp"
 #include "router/routing.hpp"
 #include "router/sideband.hpp"
+#include "router/topic_table.hpp"
 
 #include <toml.hpp>
 
@@ -100,11 +111,20 @@ public:
 
     // RouterTopology view — pointers into this LoadedTopology's storage.
     RouterTopology view() const noexcept {
-        return RouterTopology{peers_.data(), peers_.size(), router_listen_};
+        RouterTopology v{};
+        v.peers          = peers_.data();
+        v.peer_count     = peers_.size();
+        v.router_listen  = router_listen_;
+        v.topics         = topics_.data();
+        v.topic_count    = topics_.size();
+        return v;
     }
 
     const RouteRule* routes() const noexcept { return routes_.data(); }
     size_t route_count() const noexcept { return routes_.size(); }
+
+    const TopicEntry* topics() const noexcept { return topics_.data(); }
+    size_t topic_count() const noexcept { return topics_.size(); }
 
     // Per-peer sideband descriptors (may be empty).
     // out_count is set even on empty (to 0); return value may be nullptr.
@@ -144,6 +164,7 @@ private:
     std::deque<std::string> strings_;
     std::vector<PeerEntry>  peers_;
     std::vector<RouteRule>  routes_;
+    std::vector<TopicEntry> topics_;
     std::vector<SidebandRegion> sidebands_;
     std::vector<std::pair<size_t, size_t>> peer_sideband_ranges_;  // by peer index
     PeerAddress router_listen_{};
@@ -376,9 +397,11 @@ inline void LoadedTopology::build_from_(const toml::table& root) {
                            + " missing integer 'source'");
             }
             auto* dest_arr = (*rt)["dest"].as_array();
-            if (!dest_arr || dest_arr->empty() || dest_arr->size() > 2) {
+            if (!dest_arr || dest_arr->empty()
+             || dest_arr->size() > kMaxRouteDests) {
                 throw_load("[[routes]] entry #" + std::to_string(i)
-                           + " 'dest' must be an array of 1 or 2 peer ids");
+                           + " 'dest' must be an array of 1.."
+                           + std::to_string(kMaxRouteDests) + " peer ids");
             }
             auto extract_id = [&](size_t k) -> uint8_t {
                 auto v = dest_arr->at(k).value<int64_t>();
@@ -393,10 +416,12 @@ inline void LoadedTopology::build_from_(const toml::table& root) {
                 }
                 return static_cast<uint8_t>(*v);
             };
-            RouteRule rule;
+            RouteRule rule{};
             rule.source = static_cast<uint8_t>(*source_opt);
-            rule.dest0  = extract_id(0);
-            rule.dest1  = dest_arr->size() == 2 ? extract_id(1) : uint8_t{0};
+            rule.dest_count = static_cast<uint8_t>(dest_arr->size());
+            for (size_t k = 0; k < dest_arr->size(); ++k) {
+                rule.dest[k] = extract_id(k);
+            }
 
             // Validate referenced peers exist
             auto peer_exists = [&](uint8_t pid) {
@@ -407,25 +432,119 @@ inline void LoadedTopology::build_from_(const toml::table& root) {
                 throw_load("route source id " + std::to_string(rule.source)
                            + " does not match any peer");
             }
-            if (!peer_exists(rule.dest0)) {
-                throw_load("route dest id " + std::to_string(rule.dest0)
-                           + " does not match any peer");
-            }
-            if (rule.dest1 != 0 && !peer_exists(rule.dest1)) {
-                throw_load("route dest id " + std::to_string(rule.dest1)
-                           + " does not match any peer");
-            }
-            // Phase D1 — reject self-routing. The router has no reason to
-            // copy a frame back to the peer that produced it, and doing so
-            // is almost certainly a profile mistake (the publisher would
-            // receive its own publications as inputs).
-            if (rule.dest0 == rule.source
-             || (rule.dest1 != 0 && rule.dest1 == rule.source)) {
-                throw_load("route source id " + std::to_string(rule.source)
-                           + " cannot be a destination of itself "
-                           "(self-routing rejected)");
+            for (size_t k = 0; k < rule.dest_count; ++k) {
+                if (!peer_exists(rule.dest[k])) {
+                    throw_load("route dest id "
+                               + std::to_string(rule.dest[k])
+                               + " does not match any peer");
+                }
+                // Reject duplicate destinations within a single rule. The
+                // router would otherwise copy the same frame to the same
+                // peer twice, which is almost certainly a profile typo
+                // (and trips drop-attribution metrics for SHM rings).
+                for (size_t j = 0; j < k; ++j) {
+                    if (rule.dest[j] == rule.dest[k]) {
+                        throw_load("[[routes]] entry #" + std::to_string(i)
+                                   + " duplicate dest id "
+                                   + std::to_string(rule.dest[k])
+                                   + " in fan-out list");
+                    }
+                }
+                // Phase D1 — reject self-routing. The router has no
+                // reason to copy a frame back to the peer that produced
+                // it; that is almost certainly a profile mistake.
+                if (rule.dest[k] == rule.source) {
+                    throw_load("route source id "
+                               + std::to_string(rule.source)
+                               + " cannot be a destination of itself "
+                               "(self-routing rejected)");
+                }
             }
             out.routes_.push_back(rule);
+        }
+    }
+
+    // [[topics]] — Phase F C5 Scope B, optional. Declarative-only; the
+    // router never consults this catalog at runtime, so an absent section
+    // is a normal deployment.
+    if (auto* topics_array = root["topics"].as_array()) {
+        for (size_t i = 0; i < topics_array->size(); ++i) {
+            auto* tt = topics_array->at(i).as_table();
+            if (!tt) {
+                throw_load("[[topics]] entry #" + std::to_string(i)
+                           + " is not a table");
+            }
+
+            auto id_opt = (*tt)["id"].value<int64_t>();
+            if (!id_opt) {
+                throw_load("[[topics]] entry #" + std::to_string(i)
+                           + " missing integer 'id'");
+            }
+            if (*id_opt < 0 || *id_opt > 0xFFFF) {
+                throw_load("[[topics]] entry #" + std::to_string(i)
+                           + " id " + std::to_string(*id_opt)
+                           + " out of range 0..65535 (u16 wire field)");
+            }
+            const uint16_t id = static_cast<uint16_t>(*id_opt);
+
+            for (const auto& existing : out.topics_) {
+                if (existing.id == id) {
+                    throw_load("duplicate topic id " + std::to_string(id));
+                }
+            }
+
+            auto name_opt = (*tt)["name"].value<std::string>();
+            if (!name_opt) {
+                throw_load("topic id " + std::to_string(id)
+                           + " missing string 'name'");
+            }
+            if (name_opt->empty()) {
+                throw_load("topic id " + std::to_string(id) + " has empty name");
+            }
+            if (name_opt->size() > kTopicNameMaxLen) {
+                throw_load("topic name '" + *name_opt + "' exceeds "
+                           + std::to_string(kTopicNameMaxLen) + " bytes");
+            }
+            // Topic names must also be unique. Bridges look up topics
+            // both ways (by id from the wire, by name from
+            // configuration), so a clash here would silently mask the
+            // duplicate.
+            for (const auto& existing : out.topics_) {
+                if (existing.name != nullptr
+                 && std::strcmp(existing.name, name_opt->c_str()) == 0) {
+                    throw_load("duplicate topic name '" + *name_opt + "'");
+                }
+            }
+
+            TopicEntry topic{};
+            topic.id   = id;
+            topic.name = out.intern_(*name_opt);
+
+            if (auto pc_opt = (*tt)["payload_class"].value<std::string>()) {
+                if (pc_opt->empty()) {
+                    throw_load("topic '" + *name_opt
+                               + "' has empty payload_class");
+                }
+                if (pc_opt->size() > kTopicPayloadClassMaxLen) {
+                    throw_load("topic '" + *name_opt
+                               + "' payload_class exceeds "
+                               + std::to_string(kTopicPayloadClassMaxLen)
+                               + " bytes");
+                }
+                topic.payload_class = out.intern_(*pc_opt);
+            }
+
+            topic.sideband_idx = kSidebandIdxNone;
+            if (auto sb_opt = (*tt)["sideband_idx"].value<int64_t>()) {
+                if (*sb_opt < 0 || *sb_opt > 0xFFFF) {
+                    throw_load("topic '" + *name_opt
+                               + "' sideband_idx " + std::to_string(*sb_opt)
+                               + " out of range 0..65535");
+                }
+                topic.sideband_idx = static_cast<uint16_t>(*sb_opt);
+            }
+
+            out.topics_.push_back(topic);
         }
     }
 }

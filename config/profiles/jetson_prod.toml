@@ -37,10 +37,11 @@
 # Peer ID 6 (mavlink_gateway) is reserved per the 8-peer catalog but not
 # declared here — F4 will append it.
 #
-# Routes within the 2-destination-per-source cap (RouteRule.dest0/dest1).
-# Dashboard_feed (8) has no inbound route in F1 — see docs/deployment-profiles.md
-# §Dashboard limitation and parked review C5. python_tooling (7) is reached
-# via the `source = 2 dest = [3, 7]` tap (F2); on Jetson it must use SHM
+# Routes use the C5 Scope A lifted fan-out cap (kMaxRouteDests = 8).
+# dashboard_feed (8) is now a tap on every compute-side rule — on SHM
+# a non-running dashboard simply fills (then drops) its router-bound
+# ring, which is metric-visible and non-fatal. python_tooling (7) is
+# reached via the `source = 2` tap (F2); on Jetson it must use SHM
 # (the Python ctypes bridge today is UDS-only — parked C11).
 #
 # Usage:
@@ -136,24 +137,24 @@ local           = "shm:/rim_router_dashboard"
 shm_slot_count  = 256
 shm_max_payload = 64
 
-# --- Routes (2-dest-per-source cap per parked review C5) ------------------
+# --- Routes (kMaxRouteDests = 8 per closed C5 Scope A) --------------------
 
 [[routes]]
-source = 1                            # sensor   → controller + recorder
-dest   = [2, 3]
+source = 1                            # sensor    → controller + recorder + dashboard
+dest   = [2, 3, 8]
 
 [[routes]]
-source = 2                            # controller → recorder + python_tooling
-dest   = [3, 7]
+source = 2                            # controller → recorder + python + dashboard
+dest   = [3, 7, 8]
 
 [[routes]]
-source = 4                            # vision_capture → ml_inference + recorder
-dest   = [5, 3]
+source = 4                            # vision    → ml + recorder + dashboard
+dest   = [5, 3, 8]
 
 [[routes]]
-source = 5                            # ml_inference   → controller + recorder
-dest   = [2, 3]
+source = 5                            # ml_inference → controller + recorder + dashboard
+dest   = [2, 3, 8]
 
 [[routes]]
-source = 7                            # python_tooling → recorder
-dest   = [3]
+source = 7                            # python_tooling → recorder + dashboard
+dest   = [3, 8]

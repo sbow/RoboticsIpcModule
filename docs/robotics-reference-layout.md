@@ -29,7 +29,7 @@ This is a **deployment-shape document**. It documents the contract surface (peer
 | Python / Node / MAVLink bridge code | Phase F F2–F4 |
 | Vision peer + camera capture code | Phase F F5 |
 | Sideband `memory_class` (CUDA / NvBufSurface) parsing | Phase F (forward-declared in [ADR 0008](adr/0008-router-frame-v2.md)) |
-| TensorRT contract beyond peer-catalog level, replay/sim peer, declarative-transport extensions (topic registry / per-topic routes / QoS), mixed-transport networks (SHM + UDS + UDP from one router), RT pinning / `mlockall`, aarch64 CI dimension, `make install` / CMake export | Open backlog — see [plans/post-phases-robotics-review.md](../robotics-ipc-module/plans/post-phases-robotics-review.md) (considerations C1–C11) |
+| TensorRT contract beyond peer-catalog level, replay/sim peer, declarative-transport extensions (per-topic routes / priority-aware QoS — C5 Scopes C + D), mixed-transport networks (SHM + UDS + UDP from one router), RT pinning / `mlockall`, aarch64 CI dimension, `make install` / CMake export | Open backlog — see [plans/post-phases-robotics-review.md](../robotics-ipc-module/plans/post-phases-robotics-review.md) (considerations C1–C11; C5 Scopes A + B closed 2026-05-28 — 2-destination cap lifted to `kMaxRouteDests = 8`, declarative `[[topics]]` registry shipped) |
 
 ## Peer catalog
 
@@ -195,7 +195,7 @@ Today only `name` / `max_payload_bytes` / optional `version` are parsed; `class`
 - Runs inference.
 - Publishes a result `RouterFrame` with inline metadata (class id, confidence, latency_ns) and writes the full output tensor into a separate sideband region (`ml_tensor_out`).
 
-**Contract on RouterFrame fields:** same as `vision_capture` but `source = 5` and `topic_id` distinguishes input vs output streams. Subscribers route by `source` today (per-source routing — see [parked review C5](../robotics-ipc-module/plans/post-phases-robotics-review.md#c5--declarative-transport-layer-gaps); per-topic routing is a backlog consideration).
+**Contract on RouterFrame fields:** same as `vision_capture` but `source = 5` and `topic_id` distinguishes input vs output streams. Subscribers route by `source` today (per-source routing); the optional `[[topics]]` registry added by [closed C5 Scope B](../robotics-ipc-module/plans/post-phases-robotics-review.md#closure--scope-b-declarative-topic-registry-2026-05-28) lets bridges validate `topic_id` against a declared name + payload class, but does **not** drive dispatch yet — per-topic routing remains parked as Scope C.
 
 ### MAVLink gateway (`mavlink_gateway`, peer 6)
 
@@ -281,6 +281,6 @@ The [`shm_leak_check.sh`](../robotics-ipc-module/scripts/shm_leak_check.sh) scri
 | systemd unit files | [robotics-ipc-module/deploy/systemd/](../robotics-ipc-module/deploy/systemd/) (Phase E E2) |
 | Bridge pointers / scaffolding | [examples/bridges/](../examples/bridges/) (Phase E E3 scaffolding) |
 | Timestamp clock | [ADR 0010](adr/0010-router-timestamp-clock.md) — `CLOCK_MONOTONIC_RAW` single-host; cross-host delegated (Phase E E4) |
-| Profile templates + `deployment-profiles.md` | [docs/deployment-profiles.md](deployment-profiles.md) — Phase F F1 (4 profiles × 6 peers; mixed-transport + 2-dest-cap limitations cross-referenced to parked C5) |
+| Profile templates + `deployment-profiles.md` | [docs/deployment-profiles.md](deployment-profiles.md) — Phase F F1 + F2 + closed C5 Scopes A + B (4 profiles × 7 peers; routes fan out to up to `kMaxRouteDests = 8`; optional `[[topics]]` registry; only the single-transport-per-router limitation remains open, cross-referenced to parked C11) |
 | Python / Node / MAVLink / vision peer code | [Phase F F2–F5](../robotics-ipc-module/plans/F-interoperability-bridges.md) |
 | Open considerations (TensorRT contract depth, CUDA `memory_class`, ARM CI, playback peer, declarative-transport extensions, RT pinning, cross-host time, camera shape, consumption model) | [plans/post-phases-robotics-review.md](../robotics-ipc-module/plans/post-phases-robotics-review.md) |

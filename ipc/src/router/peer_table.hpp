@@ -61,10 +61,24 @@ struct PeerEntry {
     uint32_t shm_max_payload = 0;
 };
 
+// Forward declaration — TopicEntry lives in router/topic_table.hpp.
+// RouterTopology only needs to hold a const-pointer + count for the
+// (optional) topic registry, so it does not have to pull in that
+// header. Consumers that actually look up topics (`topic_by_id` etc.)
+// include topic_table.hpp explicitly.
+struct TopicEntry;
+
 struct RouterTopology {
     const PeerEntry* peers;
     size_t peer_count;
     PeerAddress router_listen;
+
+    // Phase F C5 Scope B — optional declarative topic registry.
+    // Default-empty so every existing compile-time RouterTopology
+    // aggregate-init keeps working without modification. The router
+    // does not consult this catalog today; bridges and tooling do.
+    const TopicEntry* topics = nullptr;
+    size_t topic_count = 0;
 };
 
 template<typename Predicate>

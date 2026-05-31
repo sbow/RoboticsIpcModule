@@ -5,6 +5,7 @@
 
 #include "router/topology_loader.hpp"
 #include "router/sideband.hpp"
+#include "router/topic_table.hpp"
 #include "ipc/shm_spsc.hpp"
 #include "router/frame.hpp"
 
@@ -178,12 +179,16 @@ void test_valid_uds() {
 
     EXPECT_EQ(topo.route_count(), static_cast<std::size_t>(2));
     const RouteRule* rules = topo.routes();
-    EXPECT_EQ(static_cast<int>(rules[0].source), 1);
-    EXPECT_EQ(static_cast<int>(rules[0].dest0),  2);
-    EXPECT_EQ(static_cast<int>(rules[0].dest1),  3);
-    EXPECT_EQ(static_cast<int>(rules[1].source), 2);
-    EXPECT_EQ(static_cast<int>(rules[1].dest0),  3);
-    EXPECT_EQ(static_cast<int>(rules[1].dest1),  0);
+    EXPECT_EQ(static_cast<int>(rules[0].source),     1);
+    EXPECT_EQ(static_cast<int>(rules[0].dest_count), 2);
+    EXPECT_EQ(static_cast<int>(rules[0].dest[0]),    2);
+    EXPECT_EQ(static_cast<int>(rules[0].dest[1]),    3);
+    EXPECT_EQ(static_cast<int>(rules[1].source),     2);
+    EXPECT_EQ(static_cast<int>(rules[1].dest_count), 1);
+    EXPECT_EQ(static_cast<int>(rules[1].dest[0]),    3);
+    // Unused tail must stay at the array default so any caller that
+    // ignores dest_count and over-iterates sees kEndpointInvalid (0).
+    EXPECT_EQ(static_cast<int>(rules[1].dest[1]),    0);
 }
 
 void test_valid_shm_with_sideband() {
@@ -230,11 +235,20 @@ void test_valid_udp() {
 }
 
 void test_load_from_file() {
-    // x86_dev.toml is the Phase F F1+F2 7-peer template: peers 1/2/3 (demo)
-    // plus 4 vision_capture, 5 ml_inference, 7 python_tooling (Phase F F2),
-    // 8 dashboard_feed. Routes: 1→[2,3], 2→[3,7] (F2 tap), 4→[5,3], 5→[2,3],
-    // 7→[3]. Dashboard (8) has no inbound route within the 2-dest-per-source
-    // cap (parked C5). Peer 6 (mavlink_gateway) is reserved for F4.
+    // x86_dev.toml is the Phase F F1 + F2 + C5(A+B) deployment template:
+    // 7 declared peers (1/2/3 demo + 4 vision_capture + 5 ml_inference +
+    // 7 python_tooling + 8 dashboard_feed). Peer 6 (mavlink_gateway) is
+    // reserved for F4. C5 Scope A widened every compute-side rule with
+    // dashboard (8) as a trailing destination, closing the F1 dashboard
+    // limitation:
+    //   1 -> [2, 3, 8]   (sensor    → controller + recorder + dashboard)
+    //   2 -> [3, 7, 8]   (controller → recorder + python + dashboard)
+    //   4 -> [5, 3, 8]   (vision    → ml + recorder + dashboard)
+    //   5 -> [2, 3, 8]   (ml        → controller + recorder + dashboard)
+    //   7 -> [3, 8]      (python    → recorder + dashboard)
+    // The 5-route count is unchanged from F2 — Scope A widened existing
+    // rules rather than adding new ones. The [[topics]] section
+    // demonstrates the C5 Scope B declarative topic registry (4 topics).
     LoadedTopology topo = load_topology_from_toml_file(
         "config/profiles/x86_dev.toml");
     const RouterTopology view = topo.view();
@@ -251,6 +265,39 @@ void test_load_from_file() {
     EXPECT(peer_by_id(view, 6) == nullptr);                  // reserved (F4)
     EXPECT(peer_by_id(view, 7) != nullptr);                  // python_tooling (F2)
     EXPECT(peer_by_id(view, 8) != nullptr);                  // dashboard_feed
+
+    // C5 Scope A — dashboard (8) is now wired into the sensor fan-out.
+    // The exact route shape: [2, 3, 8] in order, dest_count == 3.
+    const RouteRule* rules = topo.routes();
+    EXPECT_EQ(static_cast<int>(rules[0].source),     1);
+    EXPECT_EQ(static_cast<int>(rules[0].dest_count), 3);
+    EXPECT_EQ(static_cast<int>(rules[0].dest[0]),    2);
+    EXPECT_EQ(static_cast<int>(rules[0].dest[1]),    3);
+    EXPECT_EQ(static_cast<int>(rules[0].dest[2]),    8);
+    // Last rule — python_tooling fans out to recorder + dashboard.
+    EXPECT_EQ(static_cast<int>(rules[4].source),     7);
+    EXPECT_EQ(static_cast<int>(rules[4].dest_count), 2);
+    EXPECT_EQ(static_cast<int>(rules[4].dest[0]),    3);
+    EXPECT_EQ(static_cast<int>(rules[4].dest[1]),    8);
+
+    // C5 Scope B — the [[topics]] section in x86_dev.toml registers
+    // four topics; the loader populates view.topics so bridges and
+    // tooling can validate published frames.
+    EXPECT_EQ(view.topic_count, static_cast<std::size_t>(4));
+    const TopicEntry* imu = topic_by_id(view, 100);
+    EXPECT(imu != nullptr);
+    if (imu) {
+        EXPECT_STREQ(imu->name, "imu_proprio");
+        EXPECT_STREQ(imu->payload_class, "imu_proprio");
+        EXPECT_EQ(imu->sideband_idx, kSidebandIdxNone);
+    }
+    const TopicEntry* vis = topic_by_id(view, 300);
+    EXPECT(vis != nullptr);
+    if (vis) {
+        EXPECT_STREQ(vis->name, "vision_frame");
+        EXPECT_STREQ(vis->payload_class, "vision_nv12");
+        EXPECT_EQ(static_cast<int>(vis->sideband_idx), 0);
+    }
 }
 
 // ADR 0009 — per-peer SHM ring sizing.
@@ -419,6 +466,99 @@ void test_move_preserves_interned_pointers() {
     }
 }
 
+// --- Phase F C5 Scope A — loader accepts up to kMaxRouteDests ----------
+
+constexpr const char* kThreeDestRoute = R"(
+[router]
+listen = "uds:/tmp/r.sock"
+[[peers]]
+id = 1
+name = "a"
+local = "uds:/tmp/a.sock"
+[[peers]]
+id = 2
+name = "b"
+local = "uds:/tmp/b.sock"
+[[peers]]
+id = 3
+name = "c"
+local = "uds:/tmp/c.sock"
+[[peers]]
+id = 8
+name = "d"
+local = "uds:/tmp/d.sock"
+[[routes]]
+source = 1
+dest   = [2, 3, 8]
+)";
+
+constexpr const char* kMaxDestsRoute = R"(
+[router]
+listen = "uds:/tmp/r.sock"
+[[peers]]
+id = 1
+name = "p1"
+local = "uds:/tmp/p1.sock"
+[[peers]]
+id = 2
+name = "p2"
+local = "uds:/tmp/p2.sock"
+[[peers]]
+id = 3
+name = "p3"
+local = "uds:/tmp/p3.sock"
+[[peers]]
+id = 4
+name = "p4"
+local = "uds:/tmp/p4.sock"
+[[peers]]
+id = 5
+name = "p5"
+local = "uds:/tmp/p5.sock"
+[[peers]]
+id = 6
+name = "p6"
+local = "uds:/tmp/p6.sock"
+[[peers]]
+id = 7
+name = "p7"
+local = "uds:/tmp/p7.sock"
+[[peers]]
+id = 8
+name = "p8"
+local = "uds:/tmp/p8.sock"
+[[peers]]
+id = 9
+name = "p9"
+local = "uds:/tmp/p9.sock"
+[[routes]]
+source = 1
+dest   = [2, 3, 4, 5, 6, 7, 8, 9]
+)";
+
+void test_route_with_three_destinations_parses() {
+    LoadedTopology topo = load_topology_from_toml_string(kThreeDestRoute);
+    EXPECT_EQ(topo.route_count(), static_cast<std::size_t>(1));
+    const RouteRule* rules = topo.routes();
+    EXPECT_EQ(static_cast<int>(rules[0].source),     1);
+    EXPECT_EQ(static_cast<int>(rules[0].dest_count), 3);
+    EXPECT_EQ(static_cast<int>(rules[0].dest[0]),    2);
+    EXPECT_EQ(static_cast<int>(rules[0].dest[1]),    3);
+    EXPECT_EQ(static_cast<int>(rules[0].dest[2]),    8);
+}
+
+void test_route_with_max_destinations_parses() {
+    // Saturate kMaxRouteDests (8). Bound is set in routing.hpp.
+    static_assert(kMaxRouteDests == 8,
+                  "test assumes kMaxRouteDests == 8 — update both together");
+    LoadedTopology topo = load_topology_from_toml_string(kMaxDestsRoute);
+    EXPECT_EQ(topo.route_count(), static_cast<std::size_t>(1));
+    const RouteRule* rules = topo.routes();
+    EXPECT_EQ(static_cast<int>(rules[0].dest_count), 8);
+    EXPECT_EQ(static_cast<int>(rules[0].dest[0]),    2);
+    EXPECT_EQ(static_cast<int>(rules[0].dest[7]),    9);
+}
+
 void test_errors() {
     expect_load_error("", "missing [router] section");
 
@@ -498,7 +638,7 @@ local = "uds:/tmp/a.sock"
 [[routes]]
 source = 1
 dest = []
-)", "must be an array of 1 or 2");
+)", "'dest' must be an array of 1..");
 
     // Self-routing rejection (Phase D1 / routing test).
     expect_load_error(R"(
@@ -528,6 +668,80 @@ local = "uds:/tmp/b.sock"
 source = 1
 dest = [2, 1]
 )", "self-routing rejected");
+
+    // Phase F C5 Scope A — more than kMaxRouteDests destinations is
+    // rejected at load time. Use kMaxRouteDests + 1 distinct peers so the
+    // failure is unambiguously about the array bound, not duplicates.
+    expect_load_error(R"(
+[router]
+listen = "uds:/tmp/r.sock"
+[[peers]]
+id = 1
+name = "p1"
+local = "uds:/tmp/p1.sock"
+[[peers]]
+id = 2
+name = "p2"
+local = "uds:/tmp/p2.sock"
+[[peers]]
+id = 3
+name = "p3"
+local = "uds:/tmp/p3.sock"
+[[peers]]
+id = 4
+name = "p4"
+local = "uds:/tmp/p4.sock"
+[[peers]]
+id = 5
+name = "p5"
+local = "uds:/tmp/p5.sock"
+[[peers]]
+id = 6
+name = "p6"
+local = "uds:/tmp/p6.sock"
+[[peers]]
+id = 7
+name = "p7"
+local = "uds:/tmp/p7.sock"
+[[peers]]
+id = 8
+name = "p8"
+local = "uds:/tmp/p8.sock"
+[[peers]]
+id = 9
+name = "p9"
+local = "uds:/tmp/p9.sock"
+[[peers]]
+id = 10
+name = "p10"
+local = "uds:/tmp/p10.sock"
+[[routes]]
+source = 1
+dest = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+)", "'dest' must be an array of 1..");
+
+    // C5 Scope A — duplicate destinations within one fan-out are rejected.
+    // The router would otherwise copy the same frame to the same peer twice
+    // and trip drop-attribution metrics.
+    expect_load_error(R"(
+[router]
+listen = "uds:/tmp/r.sock"
+[[peers]]
+id = 1
+name = "a"
+local = "uds:/tmp/a.sock"
+[[peers]]
+id = 2
+name = "b"
+local = "uds:/tmp/b.sock"
+[[peers]]
+id = 3
+name = "c"
+local = "uds:/tmp/c.sock"
+[[routes]]
+source = 1
+dest = [2, 3, 2]
+)", "duplicate dest id");
 }
 
 }  // namespace
@@ -546,6 +760,10 @@ int main() {
     test_shm_ring_sizing_cache_footprint_ratio();
     test_shm_ring_sizing_validation_errors();
     test_shm_ring_sizing_jetson_profile_demonstrates_recommended_values();
+
+    // Phase F C5 Scope A — fan-out beyond two destinations.
+    test_route_with_three_destinations_parses();
+    test_route_with_max_destinations_parses();
 
     std::cout << "topology_loader_test: " << (g_total - g_failed) << '/'
               << g_total << " assertions passed\n";

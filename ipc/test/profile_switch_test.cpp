@@ -152,13 +152,17 @@ void smoke_jetson_round(const LoadedTopology& loaded, const char* label) {
     EXPECT(frame_seen.load(std::memory_order_acquire));
     EXPECT_EQ(recorder_source_byte.load(), kSensorId);
 
-    // Router metrics reflect: 1 sensor frame received, fanned out to two
-    // destinations (controller + recorder).
+    // Router metrics reflect: 1 sensor frame received, fanned out to three
+    // destinations after C5 Scope A widened source=1 to dest=[2, 3, 8]
+    // (controller + recorder + dashboard). The router binds every peer's
+    // SHM region in bind_shm_router_listen, so the dashboard ring exists
+    // and accepts writes even though we never open a dashboard client —
+    // unconsumed slots simply roll over and contribute to dropped_full.
     const ShmRouterMetrics& m = server.link().metrics();
     EXPECT(m.forwarded.load() >= 1u);
     // dropped_full may be 0 or more depending on whether the controller
-    // (which we didn't open) caused fanout-to-controller drops. We only
-    // assert the recorder got at least one frame.
+    // and dashboard rings (which we didn't drain) caused fanout drops.
+    // We only assert the recorder got at least one frame.
 
     cleanup_jetson_shm();
 }

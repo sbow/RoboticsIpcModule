@@ -40,8 +40,8 @@ constexpr PeerEntry kDemoPeers[] = {
 };
 
 constexpr RouteRule kDemoRouteRules[] = {
-    {kEndpointSensor, kEndpointController, kEndpointRecorder},
-    {kEndpointController, kEndpointRecorder, 0},
+    make_route(kEndpointSensor, kEndpointController, kEndpointRecorder),
+    make_route(kEndpointController, kEndpointRecorder),
 };
 
 inline const RouterTopology& demo_topology_uds() {

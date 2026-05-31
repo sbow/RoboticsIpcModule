@@ -4,6 +4,7 @@
 > **Source:** chat analysis dated 2026-05-26 ([Phase E fit-for-purpose review](f325cb57-00db-4d4e-a19c-2c45473839d1))
 > **Trigger question:** _"Analyze Phase E — is it fit for purpose? Consider TensorRT, CUDA, ARM, x86 playback / simulated inputs, declarative transport."_
 > **Later additions:** C11 (mixed-transport networks) surfaced during Phase F F1 — 2026-05-27.
+> **Partial closures:** **C5 Scopes A + B** closed early during Phase F (2026-05-28) — 2-destination cap lifted to `kMaxRouteDests = 8`; declarative `[[topics]]` registry added. C5 Scopes C (per-topic routing) and D (priority-aware QoS) remain parked. See the C5 entry below for the closure notes.
 
 ## Scope
 
@@ -152,9 +153,11 @@ At that point, walk each consideration, decide close / defer / scope into a new 
 
 ### C5 — Declarative transport layer (gaps)
 
-**Finding.** A declarative transport layer exists at the per-peer level (TOML profiles cover address, ring sizing, sideband regions). What is **not** declarative: topic registry, per-topic routing, QoS, transport-kind as first-class.
+> **Status update — 2026-05-28:** Scopes A (lift 2-destination cap) and B (topic registry) closed during Phase F as a single deliverable. Scopes C (per-topic routing) and D (priority-aware QoS) remain parked. The original four-gap analysis is preserved below for context; closure notes follow.
 
-**Evidence.**
+**Finding (original).** A declarative transport layer exists at the per-peer level (TOML profiles cover address, ring sizing, sideband regions). What is **not** declarative: topic registry, per-topic routing, QoS, transport-kind as first-class.
+
+**Evidence (original).**
 
 - TOML schema today ([ipc/src/router/topology_loader.hpp](../../ipc/src/router/topology_loader.hpp) `build_from_`): `[router].listen`, `[[peers]]` (`id`, `name`, `local`, optional SHM ring sizing), `[[peers.sideband]]` (name, max_payload_bytes, optional version), `[[routes]]` (source, dest = array of 1–2 peer IDs).
 - Routes are **per-source**, not per-topic ([ipc/src/router/routing.hpp](../../ipc/src/router/routing.hpp) `RouteRule { source, dest0, dest1 }`, ~lines 17–21). Lookup is `route_targets_for(rules, rule_count, source)` — first matching rule wins.
@@ -162,14 +165,52 @@ At that point, walk each consideration, decide close / defer / scope into a new 
 - QoS: 3-bit `priority` field in frame `flags` (ADR 0008) is set but the router does **not** act on it. Drop policy is fixed at drop-on-full per destination ([ShmRouterMetrics::dropped_full_per_peer](../../ipc/src/router/metrics.hpp)).
 - Transport kind is embedded in `listen`/`local` URI string (`uds:/...`, `udp:host:port`, `shm:/name`) rather than first-class.
 
-**Coverage today.** Partial — peer+address+ring+sideband are declarative; routing semantics and QoS are not.
+**Coverage today.** Partial — Scope A + B closed (see below); peer + address + ring + sideband still declarative; per-topic routing and QoS still not declarative.
 
-**Options.**
+**Options (original; numbering preserved for traceability).**
 
 1. **Document the current schema authoritatively** in [docs/robotics-reference-layout.md](../../docs/robotics-reference-layout.md) (E1) and treat the rest as publisher discipline.
-2. **Add a `[[topics]]` registry** (topic_id → name + sideband_idx + default payload class). Router behavior unchanged; tooling and bridges can validate.
-3. **Make routes per-topic** (changes `RouteRule` shape, routing dispatch, all profiles).
-4. **Make the router act on `priority`** (priority queue draining order in `forward_loop` and `ShmRouterLink::forward`).
+2. **Add a `[[topics]]` registry** (topic_id → name + sideband_idx + default payload class). Router behavior unchanged; tooling and bridges can validate. — **Closed by Scope B below.**
+3. **Make routes per-topic** (changes `RouteRule` shape, routing dispatch, all profiles). — **Parked as Scope C.**
+4. **Make the router act on `priority`** (priority queue draining order in `forward_loop` and `ShmRouterLink::forward`). — **Parked as Scope D.**
+
+---
+
+#### Closure — Scope A: lift the 2-destination cap (2026-05-28)
+
+**Trigger.** F1 surfaced a clean follow-on: `RouteRule { source, dest0, dest1 }` could not express `source = 1 → [controller, recorder, dashboard]`, leaving `dashboard_feed` (peer 8) without an inbound route across all four shipping profiles. Documented in F1's session log and in `docs/deployment-profiles.md` §Known limitations §2-destination cap.
+
+**Change.**
+
+- `ipc/src/router/routing.hpp` — `RouteRule` is now `{ uint8_t source; uint8_t dest_count; std::array<uint8_t, kMaxRouteDests> dest; }` with `kMaxRouteDests = 8` matching the existing `RouteTargets::ids` width (so no downstream change to `ForwardResult` or the link hot paths).
+- A variadic constexpr factory `make_route(source, d0, d1, …)` deduces `dest_count` from the argument list and refuses zero-dest or >8-dest rules at compile time.
+- `route_targets_for` copies `dest_count` slots into the `RouteTargets` (defaults preserve the array-tail-is-kEndpointInvalid contract; defensive coverage in `routing_test`).
+- TOML loader (`topology_loader.hpp`) accepts `dest = [...]` arrays of length 1..kMaxRouteDests, rejects duplicates within a rule, and continues to reject self-routing per Phase D1.
+- All four `config/profiles/*.toml` profiles widened uniformly: every compute-side rule now has `dashboard_feed` (8) as a trailing destination, closing the F1 dashboard limitation without changing route count or pre-C5 delivery order to existing destinations.
+
+**Tests.** `routing_test` (60 assertions; +5 for Scope A: fan-out-to-3, fan-out-to-kMaxRouteDests, mixed-width rules, `dest_count` truncation safety, `make_route` constexpr deduction). `topology_loader_test` (126 assertions; +5 for Scope A: 3-dest TOML accepts, 8-dest TOML accepts, >8-dest TOML rejects, duplicate-dest TOML rejects, new dashboard-tap assertions in `test_load_from_file`). `profile_switch_test` updated to acknowledge the wider fan-out in its comments.
+
+#### Closure — Scope B: declarative topic registry (2026-05-28)
+
+**Trigger.** Bridges (especially the F2 Python ctypes peer) were hard-coding `topic_id` magic numbers. Without a central table, a recorder cannot validate "frame.topic_id = 100 means imu_proprio with no sideband", and the system has no place to record the declared payload class per topic.
+
+**Change.**
+
+- New `ipc/src/router/topic_table.hpp` — `TopicEntry { uint16_t id; uint16_t sideband_idx; const char* name; const char* payload_class; }`. Free-form `payload_class` (matches the ADR 0005 convention for sideband classes — not a whitelist). `sideband_idx` defaults to `kSidebandIdxNone` so the registry round-trips with the `RouterFrame` "no sideband" default.
+- `RouterTopology` gains `const TopicEntry* topics` + `size_t topic_count` (default-empty; every existing aggregate-init keeps compiling). Lookups via `topic_by_id` / `topic_by_name` mirror the peer-table helpers.
+- TOML loader parses an optional `[[topics]]` section with `id` (required u16, unique), `name` (required, unique, ≤63 bytes), optional `payload_class` (≤63 bytes), and optional `sideband_idx`.
+- `config/profiles/x86_dev.toml` ships a 4-topic worked example (`imu_proprio`, `controller_command`, `vision_frame` + sideband 0, `ml_result` + sideband 1). Other profiles intentionally omit `[[topics]]` to demonstrate that the section is optional.
+
+**What Scope B does NOT do.** Routing is still per-source — the router never consults `topics_` at forward time. Consumers (bridges, recorder, dashboard) opt in to validation. Scope C will revisit dispatch.
+
+**Tests.** New `ipc/test/topic_registry_test.cpp` (42 assertions): absent-section yields empty view, three-topic round-trip, lookup by id and by name, id=0 is legal, move-stable interned pointers, and seven loader-error cases (missing id, missing name, empty name, u16-overflow id, duplicate id, duplicate name, out-of-range `sideband_idx`, empty `payload_class`).
+
+#### Still parked
+
+- **Scope C — per-topic routing.** Changes `RouteRule` semantics so the route table can dispatch on `(source, topic_id)` pairs instead of just `source`. Requires either a second rule shape (`TopicRule`) or a (source, topic) compound key in the existing table. Reopen alongside `examples/bridges/` work that needs per-topic separation (recorder filtering, dashboard subscription patterns).
+- **Scope D — priority-aware QoS.** Have `ShmRouterLink::forward` / `DatagramRouterLink::forward` consult the 3-bit `priority` field in `frame.flags` and either drop low-priority frames first on backpressure or drain a priority queue. Touches `ShmRouterMetrics::dropped_full_per_peer` accounting.
+
+Both deferred per "smallest-practical-close first" — the Scope A + B delivery is already enough to (i) close the F1 dashboard limitation and (ii) unblock bridge-side validation of `topic_id` semantics, which were the two concrete asks that surfaced during Phase F.
 
 ---
 

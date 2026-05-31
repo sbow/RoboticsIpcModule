@@ -168,7 +168,7 @@ void test_truncated_udp_datagram_drops_with_metric() {
         .router_listen = peer_udp("127.0.0.1", kRouterPortTrunc),
     };
     static constexpr RouteRule kRules[] = {
-        {kSensorId, kSubId, 0},
+        make_route(kSensorId, kSubId),
     };
 
     auto link = DatagramRouterLink<Udp>::server(kTopo);
@@ -267,7 +267,7 @@ void test_unknown_source_udp_drops_with_metric() {
         .router_listen = peer_udp("127.0.0.1", kRouterPortUnknown),
     };
     static constexpr RouteRule kRules[] = {
-        {kSensorId, kSubId, 0},
+        make_route(kSensorId, kSubId),
     };
 
     auto link = DatagramRouterLink<Udp>::server(kTopo);

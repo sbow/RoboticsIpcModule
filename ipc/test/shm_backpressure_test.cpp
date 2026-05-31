@@ -58,7 +58,7 @@ constexpr RouterTopology kTopo = {
 };
 
 constexpr RouteRule kRules[] = {
-    {1, 2, 0},   // A -> B
+    make_route(1, 2),   // A -> B
 };
 
 void cleanup_shm() {
@@ -247,7 +247,7 @@ constexpr RouterTopology kTopo3 = {
 };
 
 constexpr RouteRule kFanoutRules[] = {
-    {1, 2, 3},   // A -> {B, C}
+    make_route(1, 2, 3),   // A -> {B, C}
 };
 
 void cleanup_shm3() {

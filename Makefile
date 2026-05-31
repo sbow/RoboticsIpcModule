@@ -53,6 +53,9 @@ IPC_ROUTER_TEST           := $(IPC_TEST_DIR)/router_test
 IPC_TOPOLOGY_LOADER_TEST  := $(IPC_TEST_DIR)/topology_loader_test
 IPC_LAST_VALUE_CACHE_TEST := $(IPC_TEST_DIR)/last_value_cache_test
 
+# Phase F C5 Scope B — declarative topic registry.
+IPC_TOPIC_REGISTRY_TEST   := $(IPC_TEST_DIR)/topic_registry_test
+
 # Phase C unit tests.
 IPC_SHM_BACKPRESSURE_TEST := $(IPC_TEST_DIR)/shm_backpressure_test
 
@@ -94,12 +97,14 @@ ALL_TARGETS := \
 	$(IPC_BURST_SENSOR_TEST) \
 	$(IPC_PROFILE_SWITCH_TEST) \
 	$(IPC_ROUTER_RESTART_TEST) \
-	$(IPC_FAULT_INJECTION_TEST)
+	$(IPC_FAULT_INJECTION_TEST) \
+	$(IPC_TOPIC_REGISTRY_TEST)
 
 .PHONY: all clean debug help test-ipc test-ipc-shm test-router \
 	test-ipc-unit test-topology-loader test-last-value-cache \
 	test-shm-backpressure test-frame \
 	test-datagram-seq test-routing test-resolver test-cli-args \
+	test-topic-registry \
 	test-ipc-integration test-slow-recorder test-burst-sensor \
 	test-profile-switch test-router-restart test-fault-injection \
 	build-ipc-unit build-ipc-integration \
@@ -144,6 +149,11 @@ $(IPC_TOPOLOGY_LOADER_TEST): $(IPC_ROOT)/test/topology_loader_test.cpp \
 
 $(IPC_LAST_VALUE_CACHE_TEST): $(IPC_ROOT)/test/last_value_cache_test.cpp \
 		$(IPC_ROUTER_HEADERS) | $(IPC_TEST_DIR)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(IPC_TEST_FLAGS) $(IPC_TEST_LDFLAGS) -o $@ $<
+
+# Phase F C5 Scope B — topic registry. Pulls in toml++ via topology_loader.hpp.
+$(IPC_TOPIC_REGISTRY_TEST): $(IPC_ROOT)/test/topic_registry_test.cpp \
+		$(IPC_ROUTER_HEADERS) $(THIRD_PARTY)/tomlplusplus/toml.hpp | $(IPC_TEST_DIR)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(IPC_TEST_FLAGS) $(IPC_TEST_LDFLAGS) -o $@ $<
 
 # Phase C unit test: SHM router backpressure + metrics (ADR 0006).
@@ -250,6 +260,9 @@ test-resolver: $(IPC_RESOLVER_TEST)
 test-cli-args: $(IPC_CLI_ARGS_TEST)
 	./$(IPC_CLI_ARGS_TEST)
 
+test-topic-registry: $(IPC_TOPIC_REGISTRY_TEST)
+	./$(IPC_TOPIC_REGISTRY_TEST)
+
 # Build-only aggregates so `make -jN` can fan out the test compiles
 # without also fanning out the test invocations themselves (some Phase D
 # scenarios bind well-known /dev/shm and /tmp/*.sock paths and would
@@ -258,7 +271,7 @@ test-cli-args: $(IPC_CLI_ARGS_TEST)
 build-ipc-unit: $(IPC_FRAME_TEST) $(IPC_TOPOLOGY_LOADER_TEST) \
 	$(IPC_LAST_VALUE_CACHE_TEST) $(IPC_SHM_BACKPRESSURE_TEST) \
 	$(IPC_DATAGRAM_SEQ_TEST) $(IPC_ROUTING_TEST) $(IPC_RESOLVER_TEST) \
-	$(IPC_CLI_ARGS_TEST)
+	$(IPC_CLI_ARGS_TEST) $(IPC_TOPIC_REGISTRY_TEST)
 
 build-ipc-integration: $(IPC_SLOW_RECORDER_TEST) $(IPC_BURST_SENSOR_TEST) \
 	$(IPC_PROFILE_SWITCH_TEST) $(IPC_ROUTER_RESTART_TEST) \
@@ -278,6 +291,7 @@ test-ipc-unit: build-ipc-unit
 	@$(MAKE) test-routing
 	@$(MAKE) test-resolver
 	@$(MAKE) test-cli-args
+	@$(MAKE) test-topic-registry
 
 # Phase D2 — integration scenarios (no fork: slow_recorder, burst_sensor,
 # profile_switch; subprocess fork: router_restart, fault_injection).

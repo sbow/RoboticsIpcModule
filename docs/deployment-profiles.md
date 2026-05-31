@@ -31,7 +31,7 @@ All four profiles declare the same seven peers, with stable IDs per the [SYSTEM-
 
 ## Route topology
 
-Routes are identical across all four profiles (only transport changes). Each rule fans one source out to up to **two** destinations — the current routing API caps `RouteRule.dest0/dest1` at two slots (see [Known limitations §2-destination cap](#known-limitations) below).
+Routes are identical across all four profiles (only transport changes). Each rule fans one source out to up to **`kMaxRouteDests` = 8** destinations — the prior 2-destination cap was lifted by [closed C5 Scope A](../robotics-ipc-module/plans/post-phases-robotics-review.md#c5--declarative-transport-layer-gaps). `dashboard_feed` (peer 8) is now a tap on every compute-side rule, closing the F1 dashboard limitation.
 
 ```mermaid
 flowchart LR
@@ -45,13 +45,18 @@ flowchart LR
 
   S -->|sensor data + tap| C
   S -->|sensor data + tap| REC
+  S -->|dashboard tap| DASH
   C -->|commands| REC
   C -->|controller tap| PY
+  C -->|dashboard tap| DASH
   V -->|metadata + sideband ref| ML
   V -->|metadata + sideband ref| REC
+  V -->|dashboard tap| DASH
   ML -->|results + sideband ref| C
   ML -->|results + sideband ref| REC
+  ML -->|dashboard tap| DASH
   PY -->|tooling output| REC
+  PY -->|dashboard tap| DASH
 
   DASH:::sketch
   classDef sketch fill:#eee,stroke:#888,stroke-dasharray:4 4
@@ -61,27 +66,27 @@ In TOML:
 
 ```toml
 [[routes]]
-source = 1                            # sensor   → controller + recorder
-dest   = [2, 3]
+source = 1                            # sensor    → controller + recorder + dashboard
+dest   = [2, 3, 8]
 
 [[routes]]
-source = 2                            # controller → recorder + python_tooling (F2 tap)
-dest   = [3, 7]
+source = 2                            # controller → recorder + python_tooling + dashboard
+dest   = [3, 7, 8]
 
 [[routes]]
-source = 4                            # vision_capture → ml_inference + recorder
-dest   = [5, 3]
+source = 4                            # vision_capture → ml_inference + recorder + dashboard
+dest   = [5, 3, 8]
 
 [[routes]]
-source = 5                            # ml_inference   → controller + recorder
-dest   = [2, 3]
+source = 5                            # ml_inference   → controller + recorder + dashboard
+dest   = [2, 3, 8]
 
 [[routes]]
-source = 7                            # python_tooling → recorder (F2)
-dest   = [3]
+source = 7                            # python_tooling → recorder + dashboard
+dest   = [3, 8]
 ```
 
-Recorder (peer 3) is the central "log + tap" point — every active source has a destination of 3, so the recorder sees the full dataflow. `python_tooling` (peer 7) gets a controller tap via `source = 2 dest = [3, 7]` so the F2 Python bridge can observe the control plane without taking a destination slot away from the recorder.
+Recorder (peer 3) remains the central "log + tap" point — every active source has a destination of 3, so the recorder sees the full dataflow. `python_tooling` (peer 7) gets a controller tap via `source = 2 dest = [3, 7, 8]` so the F2 Python bridge can observe the control plane. `dashboard_feed` (peer 8) is a mirror-image tap on every compute-side rule, so once the F3 Node gateway is running it subscribes to the full system view without bridges editing the route table per deployment. Listing peer 8 at the **end** of every `dest` array preserves pre-C5 delivery order to existing destinations (controller / recorder etc. receive first; dashboard last).
 
 ## Per-profile shape
 
@@ -156,19 +161,25 @@ Consequence for F1: all six peers in `jetson_prod.toml` ride SHM, even though IO
 
 The proper fix — a `MixedTransportRouterLink` that fans out across SHM/UDS/UDP from a single instance, or alternatively a factory-generated bridge daemon pattern between single-transport routers, or peer-side dual-protocol bridges — is captured in [parked review C11 §Mixed-transport networks](../robotics-ipc-module/plans/post-phases-robotics-review.md#c11--mixed-transport-networks) (three options + variants, decision rubric, co-design hint with [C5 §Declarative transport gaps](../robotics-ipc-module/plans/post-phases-robotics-review.md#c5--declarative-transport-layer-gaps)).
 
-### 2-destination cap
+### 2-destination cap — **closed 2026-05-28 (C5 Scope A)**
 
-`RouteRule` carries `dest0` + `dest1` only. A peer that needs to fan out to three or more destinations cannot be expressed in a single rule. With the **first-match-wins** lookup in [`routing.hpp::route_targets_for`](../ipc/src/router/routing.hpp), a second rule with the same source is **never evaluated** — the loop returns on the first match.
+> Historical note. The original Phase F F1 / F2 profiles were constrained by a `RouteRule { source, dest0, dest1 }` shape — a single rule could not fan out to more than two destinations, and the **first-match-wins** lookup in [`routing.hpp::route_targets_for`](../ipc/src/router/routing.hpp) meant a second rule with the same source was never evaluated. This left `dashboard_feed` (peer 8) without an inbound route in every shipped profile.
 
-Consequence for F1: `dashboard_feed` (peer 8) has no inbound route. To deliver sensor / controller / vision / ml frames to a browser, an operator either:
+The cap is now lifted to **`kMaxRouteDests = 8`** ([`routing.hpp`](../ipc/src/router/routing.hpp), aligns with the existing `RouteTargets::ids` width and the 8-peer catalog). A single rule can fan out to every peer in the topology. All four profiles widened their compute-side routes with `dashboard_feed` (peer 8) as a trailing destination — see the [Route topology](#route-topology) section above. The first-match-wins semantics are unchanged; a second rule with the same source is still ignored.
 
-- Runs the dashboard as a tap on the recorder process (recorder reads everything, re-emits to a WebSocket — needs custom code, not in F1).
-- Picks a single source to mirror by adding one targeted rule (e.g. `[[routes]] source=2 dest=[3,8]` would send controller frames to recorder AND dashboard at the cost of dropping recorder-only as a single rule; trade-off documented).
-- Waits for the parked-C5 fix.
+Trade-offs the operator should know about:
 
-### Dashboard limitation
+- **`make_route(source, d0, d1, …)`** is a constexpr factory in [`routing.hpp`](../ipc/src/router/routing.hpp) that deduces `dest_count` and rejects >`kMaxRouteDests` arguments at compile time. The TOML loader applies the same bound at load time and additionally rejects duplicate destinations within a rule and self-routing.
+- **Trailing-destination convention.** When a rule lists `dashboard_feed` (or any optional bridge peer) at the **end** of its dest array, the rule preserves pre-Scope-A delivery order for the destinations it had before. Bridges that may not be running (Node dashboard, Python tooling) belong at the tail.
+- **Per-destination failure isolation is still a datagram-link limitation.** On UDS, `sendto` to a non-listening peer throws; the throw bubbles out of `forward()` after earlier destinations in the same fan-out have already received the frame. Per-destination resilience is its own concern, parked alongside C5 Scope C.
 
-For the reasons above, the F1 profiles **declare** peer 8 (`dashboard_feed`) for catalog completeness and resource-name reservation, but its in-router data path is empty. The F3 Node gateway sketch under [`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/) covers what the bridge looks like; the routing answer lands when C5 closes.
+See the closure notes in [parked review C5 §Closure — Scope A](../robotics-ipc-module/plans/post-phases-robotics-review.md#closure--scope-a-lift-the-2-destination-cap-2026-05-28).
+
+### Dashboard limitation — **closed 2026-05-28 (via C5 Scope A)**
+
+> Historical note. F1 declared peer 8 (`dashboard_feed`) for catalog completeness but the 2-destination cap left it with no inbound route in any profile.
+
+With C5 Scope A landed, every compute-side rule now lists `dashboard_feed` as a trailing destination, so the F3 Node gateway sketch under [`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/) can subscribe to the full system view without bridges editing the route table per deployment. On Jetson (SHM) an idle dashboard ring fills then drops as backpressure; on UDS / UDP an idle dashboard receiver causes per-destination failures that the datagram link does not yet isolate from earlier destinations in the same fan-out (parked alongside C5 Scope C).
 
 ### Peer 6 absent
 
@@ -188,6 +199,36 @@ All runtime resources use the `rim_` prefix per the [Phase D→E rename](../docs
 | Demo log file (UDS / SHM) | `/tmp/rim_router_<role>.log` | `rim_router_recorder.log` (recorder CSV) |
 
 [`shm_leak_check.sh`](../robotics-ipc-module/scripts/shm_leak_check.sh) and [`rim-router-cleanup.sh`](../robotics-ipc-module/deploy/systemd/rim-router-cleanup.sh) both rely on the `rim_*` prefix to recognize module-owned resources.
+
+## Topic registry (optional)
+
+[Closed C5 Scope B](../robotics-ipc-module/plans/post-phases-robotics-review.md#closure--scope-b-declarative-topic-registry-2026-05-28) adds an optional `[[topics]]` section that maps each `topic_id` (the `u16` field carried in `RouterFrame` v2) to a name, payload class, and sideband-slot hint. The registry is **declarative-only**: the router never consults it at forward time. Bridges, recorders, and the dashboard use it to validate published frames against the deployment's documented schema.
+
+`x86_dev.toml` ships a worked example; the other profiles intentionally omit the section to demonstrate that it is optional.
+
+```toml
+[[topics]]
+id            = 100                       # required u16, unique
+name          = "imu_proprio"             # required, unique, <= 63 bytes
+payload_class = "imu_proprio"             # optional, free-form, <= 63 bytes
+
+[[topics]]
+id            = 300
+name          = "vision_frame"
+payload_class = "vision_nv12"
+sideband_idx  = 0                          # optional u16, default kSidebandIdxNone
+```
+
+Schema rules (enforced by [`topology_loader.hpp`](../ipc/src/router/topology_loader.hpp)):
+
+| Field | Type | Required | Constraints |
+|-------|------|----------|-------------|
+| `id` | u16 | yes | 0..65535; unique across the section |
+| `name` | string | yes | non-empty, ≤ 63 bytes, unique |
+| `payload_class` | string | no | non-empty if present, ≤ 63 bytes; free-form (no whitelist) |
+| `sideband_idx` | u16 | no | 0..65535; defaults to `kSidebandIdxNone` (0xFFFF) — matches the `RouterFrame` default for "no sideband" |
+
+Consumer-side helpers live in [`router/topic_table.hpp`](../ipc/src/router/topic_table.hpp): `topic_by_id(topo, 100)`, `topic_by_name(topo, "imu_proprio")`. A `RouterTopology` with no `[[topics]]` declared has `topic_count == 0`; lookups against an empty registry return `nullptr` (safe). Scope C — promoting topics from a documented catalog to an actual dispatch key in `RouteRule` — is still parked.
 
 ## Operator hand-off checklist
 
@@ -217,7 +258,8 @@ When deploying to a new host:
 | MAVLink gateway (peer 6) | Phase F F4; stub [`examples/bridges/mavlink_gateway/`](../examples/bridges/mavlink_gateway/) |
 | Vision + ML sideband `memory_class` parsing | Phase F F5; stub [`examples/bridges/vision_peer/`](../examples/bridges/vision_peer/) |
 | Mixed-transport router fanout (SHM + UDS + UDP from one router) | Parked review C11 — three options (factory bridge daemons / mixed-transport router / peer-side bridging) + decision rubric |
-| 2-destination cap, topic registry, QoS | Parked review C5 (declarative-transport gaps) |
+| 2-destination cap, topic registry | **Closed 2026-05-28** — C5 Scopes A + B; see [§Topic registry](#topic-registry-optional) above and [parked review C5](../robotics-ipc-module/plans/post-phases-robotics-review.md#c5--declarative-transport-layer-gaps) |
+| Per-topic routing, priority-aware QoS | Parked review C5 Scopes C + D (still parked) |
 | Replay-grade recorder | Parked review C4 (replay needs a richer log format than today's CSV) |
 | TensorRT contract depth, CUDA memory_class, ARM CI, RT pinning, cross-host time, camera shape, consumption model | Parked review C1–C10 — see [plans/post-phases-robotics-review.md](../robotics-ipc-module/plans/post-phases-robotics-review.md) |
 

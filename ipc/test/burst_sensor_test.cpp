@@ -83,7 +83,7 @@ constexpr RouterTopology kTopo = {
 };
 
 constexpr RouteRule kRules[] = {
-    {kSensorId, kSubId, 0},
+    make_route(kSensorId, kSubId),
 };
 
 void cleanup_shm() {
