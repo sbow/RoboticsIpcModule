@@ -9,7 +9,7 @@ This directory holds **bridge processes** that interoperate with the C++ router 
 | Directory | Peer ID | Bridge | Status | Phase F deliverable |
 |-----------|---------|--------|--------|---------------------|
 | [`python_peer/`](python_peer/) | 7 | Python subscriber/publisher matching the v2 frame layout (UDS, ctypes) | **Implemented** | F2 |
-| [`node_gateway/`](node_gateway/) | 8 | UDS → WebSocket gateway for browser dashboards | **Sketch only** | F3 |
+| [`node_gateway/`](node_gateway/) | 8 | UDP → WebSocket gateway for browser dashboards (stdlib only) | **Implemented** | F3 |
 | [`mavlink_gateway/`](mavlink_gateway/) | 6 | Serial / MAVLink ↔ router status frames | **Sketch only** | F4 |
 | [`vision_peer/`](vision_peer/) | 4 | CSI / V4L2 vision metadata + sideband NV12 / JPEG | **Sketch only** | F5 |
 
@@ -31,7 +31,7 @@ Bridges are clients of the router server, using one of the transports the router
 |------------|------------------|----------------------|
 | x86 dev | UDS | `/tmp/rim_router.sock` (`python_peer` is wire-tested here — see [`python_peer/`](python_peer/)) |
 | Jetson on-robot | SHM | `/dev/shm/rim_router_<peer>` (all 7 F1+F2 peers on SHM — see [docs/deployment-profiles.md §Known limitations](../../docs/deployment-profiles.md#known-limitations) for why Node-style and Python-style bridges currently need a native SHM addon or a separate UDS bridge daemon) |
-| HIL bench | UDP loopback | `127.0.0.1:19100` (ports 19101–19108 per peer; see [hil.toml](../../config/profiles/hil.toml)) |
+| HIL bench | UDP loopback | `127.0.0.1:19100` (ports 19101–19108 per peer; see [hil.toml](../../config/profiles/hil.toml)). The F3 [`node_gateway`](node_gateway/) is wire-tested against UDP on this profile shape. |
 | Sim / CI cloud | UDP | container subnet per `sim_cloud.toml` |
 
 For the operator-facing breakdown — selector, per-profile shape, route topology, known limitations — see [`docs/deployment-profiles.md`](../../docs/deployment-profiles.md) (Phase F F1). For per-bridge contract details (which `RouterFrame` fields a Python peer reads / writes, sideband region layout for vision, etc.), see the **Integration patterns** section in [`docs/robotics-reference-layout.md`](../../docs/robotics-reference-layout.md#integration-patterns) — that's the authoritative contract surface, written in Phase E E1.

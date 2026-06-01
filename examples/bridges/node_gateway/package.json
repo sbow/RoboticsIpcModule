@@ -1,0 +1,18 @@
+{
+  "name": "rim-node-gateway",
+  "version": "0.1.0",
+  "description": "Phase F F3 — Node UDP subscriber + WebSocket broadcast gateway for the C++ router (RoboticsIpcModule)",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "gateway": "node ./gateway.js",
+    "subscribe": "node ./subscribe.js",
+    "publish": "node ./publish.js",
+    "smoke": "bash ./smoke.sh"
+  },
+  "main": "gateway.js",
+  "license": "MIT",
+  "private": true
+}

@@ -25,7 +25,7 @@ All four profiles declare the same seven peers, with stable IDs per the [SYSTEM-
 | 4 | `vision_capture` | Sketch — Phase F F5 | CSI/V4L camera pipeline; metadata frames + NV12 sideband |
 | 5 | `ml_inference` | Sketch — Phase F F5 | CUDA / TensorRT engine; metadata frames + tensor sidebands |
 | 7 | `python_tooling` | **Implemented — Phase F F2** ([`examples/bridges/python_peer/`](../examples/bridges/python_peer/)) | Python subscriber / publisher; UDS today, ctypes RouterFrame port |
-| 8 | `dashboard_feed` | Sketch — Phase F F3 | Node UDS → WebSocket gateway |
+| 8 | `dashboard_feed` | **Implemented** — Phase F F3 ([`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/)) | Node UDP → WebSocket gateway (stdlib only, no `npm install`); reachable on UDP profiles (`hil.toml`, `sim_cloud.toml`); UDS / SHM reachability tracked under parked C11 |
 
 **Peer ID 6 (`mavlink_gateway`) is intentionally absent until F4.** The profile files leave room (port 19106 in `hil.toml`, address `10.0.0.7` in `sim_cloud.toml`) so adding it later does not require renumbering.
 
@@ -86,7 +86,7 @@ source = 7                            # python_tooling → recorder + dashboard
 dest   = [3, 8]
 ```
 
-Recorder (peer 3) remains the central "log + tap" point — every active source has a destination of 3, so the recorder sees the full dataflow. `python_tooling` (peer 7) gets a controller tap via `source = 2 dest = [3, 7, 8]` so the F2 Python bridge can observe the control plane. `dashboard_feed` (peer 8) is a mirror-image tap on every compute-side rule, so once the F3 Node gateway is running it subscribes to the full system view without bridges editing the route table per deployment. Listing peer 8 at the **end** of every `dest` array preserves pre-C5 delivery order to existing destinations (controller / recorder etc. receive first; dashboard last).
+Recorder (peer 3) remains the central "log + tap" point — every active source has a destination of 3, so the recorder sees the full dataflow. `python_tooling` (peer 7) gets a controller tap via `source = 2 dest = [3, 7, 8]` so the F2 Python bridge can observe the control plane. `dashboard_feed` (peer 8) is a mirror-image tap on every compute-side rule, and the F3 Node gateway ([`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/)) subscribes to the full system view without bridges editing the route table per deployment — it broadcasts each frame to browsers as JSON over WebSocket. Listing peer 8 at the **end** of every `dest` array preserves pre-C5 delivery order to existing destinations (controller / recorder etc. receive first; dashboard last).
 
 ## Per-profile shape
 
@@ -179,7 +179,7 @@ See the closure notes in [parked review C5 §Closure — Scope A](../robotics-ip
 
 > Historical note. F1 declared peer 8 (`dashboard_feed`) for catalog completeness but the 2-destination cap left it with no inbound route in any profile.
 
-With C5 Scope A landed, every compute-side rule now lists `dashboard_feed` as a trailing destination, so the F3 Node gateway sketch under [`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/) can subscribe to the full system view without bridges editing the route table per deployment. On Jetson (SHM) an idle dashboard ring fills then drops as backpressure; on UDS / UDP an idle dashboard receiver causes per-destination failures that the datagram link does not yet isolate from earlier destinations in the same fan-out (parked alongside [Phase G — Declarative routing](../robotics-ipc-module/plans/G-declarative-routing.md), which can sidestep the symptom by giving dashboard a per-topic route instead of a tap on every rule).
+With C5 Scope A landed, every compute-side rule now lists `dashboard_feed` as a trailing destination, and the F3 Node gateway at [`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/) (UDP transport, stdlib only, no `npm install`) subscribes to the full system view without bridges editing the route table per deployment. On Jetson (SHM) an idle dashboard ring fills then drops as backpressure; on UDS / UDP an idle dashboard receiver causes per-destination failures that the datagram link does not yet isolate from earlier destinations in the same fan-out (parked alongside [Phase G — Declarative routing](../robotics-ipc-module/plans/G-declarative-routing.md), which can sidestep the symptom by giving dashboard a per-topic route instead of a tap on every rule).
 
 ### Peer 6 absent
 
@@ -254,7 +254,7 @@ When deploying to a new host:
 | Topic | Where it lands |
 |-------|----------------|
 | Python bridge (peer 7) | **Phase F F2 implemented** — [`examples/bridges/python_peer/`](../examples/bridges/python_peer/) (UDS today; UDP variant deferred — see the bridge README) |
-| Node dashboard (peer 8) implementation | Phase F F3; stub [`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/) |
+| Node dashboard (peer 8) implementation | **Phase F F3 implemented** — [`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/) (UDP today, stdlib only; UDS / SHM tracked under parked C11) |
 | MAVLink gateway (peer 6) | Phase F F4; stub [`examples/bridges/mavlink_gateway/`](../examples/bridges/mavlink_gateway/) |
 | Vision + ML sideband `memory_class` parsing | Phase F F5; stub [`examples/bridges/vision_peer/`](../examples/bridges/vision_peer/) |
 | Mixed-transport router fanout (SHM + UDS + UDP from one router) | Parked review C11 — three options (factory bridge daemons / mixed-transport router / peer-side bridging) + decision rubric |

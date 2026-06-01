@@ -554,8 +554,9 @@ UDS rebind after stale socket) and a TOML loader fault path
 - [SYSTEM-VISION.md](../robotics-ipc-module/SYSTEM-VISION.md) — deployment targets and peer catalog
 - [docs/robotics-reference-layout.md](../docs/robotics-reference-layout.md) — Phase E reference layout: peer catalog, per-deployment shapes (Jetson / x86 / HIL / sim), integration patterns, forward references
 - [robotics-ipc-module/deploy/systemd/README.md](../robotics-ipc-module/deploy/systemd/README.md) — Phase E systemd unit examples: `rim-router.service`, `rim-peer@.service` template, `ExecStopPost` cleanup, install + customization + hardening notes
-- [examples/bridges/README.md](../examples/bridges/README.md) — Phase E E3 scaffolding for Phase F bridges (`python_peer` [implemented in F2], `node_gateway` [F3 sketch], `mavlink_gateway` [F4 sketch], `vision_peer` [F5 sketch])
+- [examples/bridges/README.md](../examples/bridges/README.md) — Phase E E3 scaffolding for Phase F bridges (`python_peer` [implemented in F2], `node_gateway` [implemented in F3], `mavlink_gateway` [F4 sketch], `vision_peer` [F5 sketch])
 - [examples/bridges/python_peer/](../examples/bridges/python_peer/) — Phase F F2 reference bridge; ctypes port of `RouterFrame` v2 + UDS subscriber/publisher + self-terminating smoke (`Python -> C++ router -> Python` round-trip with byte-exact payload comparison)
+- [examples/bridges/node_gateway/](../examples/bridges/node_gateway/) — Phase F F3 reference bridge; Buffer-based port of `RouterFrame` v2 + UDP subscriber + RFC 6455 WebSocket broadcast (stdlib only, no `npm install`) + self-terminating smoke (`Node UDP publisher -> C++ router -> Node gateway -> stdlib WebSocket client` round-trip with byte-exact payload comparison via JSON broadcast schema)
 - [docs/adr/0001-ipc-and-router.md](../docs/adr/0001-ipc-and-router.md) — original header-only IPC + router decision
 - [docs/adr/0002-ipc-router-refactor.md](../docs/adr/0002-ipc-router-refactor.md) — layered split (transport / link / node / app)
 - [docs/adr/0003-transport-agnostic-router.md](../docs/adr/0003-transport-agnostic-router.md) — peer-address adapters + factories

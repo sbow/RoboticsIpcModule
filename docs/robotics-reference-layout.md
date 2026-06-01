@@ -44,7 +44,7 @@ Peer IDs are byte-valued (1–255) and stable across deployment profiles per the
 | 5 | `ml_inference` | CUDA inference (e.g. TensorRT) | metadata + tensor descriptor | input + output tensors via SHM region | **Sketch only** — Phase F F5; CUDA-class sidebands deferred to Phase F |
 | 6 | `mavlink_gateway` | MCU bridge over serial | compact status frames (mode, attitude, ack) | none | **Sketch only** — Phase F F4 |
 | 7 | `python_tooling` | Training / scripts; offline batch | matches v2 frame layout via ctypes | optional | **Implemented** — Phase F F2 ([`examples/bridges/python_peer/`](../examples/bridges/python_peer/)) |
-| 8 | `dashboard_feed` | Node UDS → WebSocket gateway | reads everything; forwards to browser | none | **Sketch only** — Phase F F3 |
+| 8 | `dashboard_feed` | Node UDP → WebSocket gateway (stdlib, no `npm install`) | reads everything; forwards to browser as JSON | none | **Implemented** — Phase F F3 ([`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/)) |
 
 **Frame layout** (64 B, host little-endian) per [ADR 0008](adr/0008-router-frame-v2.md):
 `source` (u8) · `flags` (u8) · `topic_id` (u16) · `seq` (u32) · `timestamp_ns` (u64) · `sideband_idx` (u8) · `sideband_len` (u48) · `sideband_seq` (u8) · 32 B inline payload.
@@ -227,9 +227,13 @@ Today only `name` / `max_payload_bytes` / optional `version` are parsed; `class`
 
 ### Node dashboard gateway (`dashboard_feed`, peer 8)
 
-**Status:** sketch only — stub at [`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/); implementation lands in [F3](../robotics-ipc-module/plans/F-interoperability-bridges.md#f3--node-dashboard-gateway-example).
+**Status:** implemented in [F3](../robotics-ipc-module/plans/F-interoperability-bridges.md#f3--node-dashboard-gateway-example) at [`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/) — fully self-terminating `smoke.sh` runs a `publish.js → C++ router → gateway.js → ws_test_client.js` round-trip in ~2 s with byte-exact payload verification.
 
-**Process shape.** Node.js process. UDS client to router, WebSocket server to browser. Decodes the inline 32 B payload + sideband metadata into JSON for the browser. The C++ router has no Node API surface — the gateway parses the frame layout itself.
+**Process shape.** Node.js (≥ 18) process; pure stdlib (no `npm install`, no third-party deps). UDP client to router, WebSocket server to browser. Decodes the inline 32 B payload + sideband metadata into JSON for the browser; the C++ router has no Node API surface — the gateway parses the frame layout itself via a Buffer-backed `RouterFrame` port with byte-offset self-checks that fail-fast on load if the C++ struct ever drifts from the [ADR 0008](adr/0008-router-frame-v2.md) table.
+
+**Contract on `RouterFrame` fields:** as a subscriber, the gateway reads every field and serializes them into one JSON message per UDP frame — `source` / `source_name` / `flags` / `topic_id` / `seq` / `timestamp_ns` (router's `CLOCK_MONOTONIC_RAW`, ADR 0010, emitted as a string because JSON numbers are IEEE 754) / `sideband_idx` / `sideband_len` / `sideband_seq` / `payload_hex` / `payload_text`. The router resolves the source peer from the sender's UDP source `host:port` via [`peer_id_from_recv<Udp>`](../ipc/src/router/datagram_peer_resolver.hpp), so the gateway **must** `bind` at the peer-8 host:port declared in the profile before sending — see [the bridge README](../examples/bridges/node_gateway/README.md#how-the-router-identifies-the-gateway) and the Phase D4 `recv_unknown_source` counter that catches misconfiguration.
+
+**Transport reachability.** Node's stdlib `dgram` module supports only UDP. The F3 gateway works out of the box against `hil.toml` and `sim_cloud.toml` (UDP profiles). For `x86_dev.toml` (UDS) the gateway needs either the [`unix-dgram`](https://www.npmjs.com/package/unix-dgram) npm package or a small profile variant that swaps peer 8 to UDP. For `jetson_prod.toml` (SHM) the gateway is not reachable — parked under [C11 mixed-transport networks](../robotics-ipc-module/plans/post-phases-robotics-review.md#c11--mixed-transport-networks); the practical fix is running the gateway on x86 and forwarding via UDP. **Do not** embed Node in `libipc` — header-only C++ keeps the boundary clean ([ADR 0004](adr/0004-robotics-module-boundaries.md)).
 
 ## Operational notes
 
@@ -282,5 +286,5 @@ The [`shm_leak_check.sh`](../robotics-ipc-module/scripts/shm_leak_check.sh) scri
 | Bridge pointers / scaffolding | [examples/bridges/](../examples/bridges/) (Phase E E3 scaffolding) |
 | Timestamp clock | [ADR 0010](adr/0010-router-timestamp-clock.md) — `CLOCK_MONOTONIC_RAW` single-host; cross-host delegated (Phase E E4) |
 | Profile templates + `deployment-profiles.md` | [docs/deployment-profiles.md](deployment-profiles.md) — Phase F F1 + F2 + closed C5 Scopes A + B (4 profiles × 7 peers; routes fan out to up to `kMaxRouteDests = 8`; optional `[[topics]]` registry; only the single-transport-per-router limitation remains open, cross-referenced to parked C11) |
-| Python / Node / MAVLink / vision peer code | [Phase F F2–F5](../robotics-ipc-module/plans/F-interoperability-bridges.md) |
+| Python / Node / MAVLink / vision peer code | [Phase F F2–F5](../robotics-ipc-module/plans/F-interoperability-bridges.md) (F2 shipped in [`examples/bridges/python_peer/`](../examples/bridges/python_peer/); F3 shipped in [`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/); F4/F5 are README-only stubs awaiting implementation) |
 | Open considerations (TensorRT contract depth, CUDA `memory_class`, ARM CI, playback peer, declarative-transport extensions, RT pinning, cross-host time, camera shape, consumption model) | [plans/post-phases-robotics-review.md](../robotics-ipc-module/plans/post-phases-robotics-review.md) |
