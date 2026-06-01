@@ -42,7 +42,7 @@ Peer IDs are byte-valued (1–255) and stable across deployment profiles per the
 | 3 | `recorder` | Black-box log; subscribe-all | reads everything; writes log | none | Demo binary (`router_client recorder`); CSV format — **not playback-compatible** (see C4 in parked review) |
 | 4 | `vision_capture` | CSI/V4L camera pipeline | metadata only (`topic_id`, `seq`, `timestamp_ns`, sideband descriptor) | NV12 / JPEG via SHM region | **Sketch only** — Phase F F5 |
 | 5 | `ml_inference` | CUDA inference (e.g. TensorRT) | metadata + tensor descriptor | input + output tensors via SHM region | **Sketch only** — Phase F F5; CUDA-class sidebands deferred to Phase F |
-| 6 | `mavlink_gateway` | MCU bridge over serial | compact status frames (mode, attitude, ack) | none | **Sketch only** — Phase F F4 |
+| 6 | `mavlink_gateway` | MCU bridge over UART (MAVLink v2 stream parsed → one RouterFrame per message) | compact status frames (mode, attitude, ack) | optional `mavlink_bulk` for param dumps | **Interface + ADR ([0011](adr/0011-device-bridge-transports.md))** — Phase F F4; binary deferred ([`examples/bridges/mavlink_gateway/`](../examples/bridges/mavlink_gateway/)) |
 | 7 | `python_tooling` | Training / scripts; offline batch | matches v2 frame layout via ctypes | optional | **Implemented** — Phase F F2 ([`examples/bridges/python_peer/`](../examples/bridges/python_peer/)) |
 | 8 | `dashboard_feed` | Node UDP → WebSocket gateway (stdlib, no `npm install`) | reads everything; forwards to browser as JSON | none | **Implemented** — Phase F F3 ([`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/)) |
 
@@ -199,14 +199,17 @@ Today only `name` / `max_payload_bytes` / optional `version` are parsed; `class`
 
 ### MAVLink gateway (`mavlink_gateway`, peer 6)
 
-**Status:** sketch only — stub at [`examples/bridges/mavlink_gateway/`](../examples/bridges/mavlink_gateway/); implementation lands in [F4](../robotics-ipc-module/plans/F-interoperability-bridges.md#f4--mavlink-gateway-sketch).
+**Status:** interface + ADR ([0011](adr/0011-device-bridge-transports.md)) shipped 2026-05-31; working binary deferred per the [F4 plan](../robotics-ipc-module/plans/F-interoperability-bridges.md#f4--mavlink-gateway-sketch). See [`examples/bridges/mavlink_gateway/README.md`](../examples/bridges/mavlink_gateway/README.md) for the locked interface (peer-id reservation, profile shape, inline payload schema for `HEARTBEAT` / `ATTITUDE` / `SYS_STATUS` / `STATUSTEXT` / `COMMAND_ACK`, command flow, systemd serial-device permissions).
+
+**Transport (bridge → router): UDS `SOCK_DGRAM`** per [ADR 0011 §UART / MAVLink](adr/0011-device-bridge-transports.md#uart--mavlink--uds-sock_dgram-peer-6-the-f4-worked-example). The bridge parses the MAVLink stream into discrete messages and emits one `RouterFrame` per message; `SOCK_STREAM` passthrough was considered and rejected (would require new router transport support, breaks `peer_id_from_recv` source resolution, and re-streamifies after the bridge already parsed). The same ADR also covers transport selection for SPI (→ SHM SPSC ring), I²C and CAN / CAN-FD (→ UDS dgram) so a downstream user adding any of those bridges follows the same shape.
 
 **Process shape.**
 
-- Separate binary, opens `/dev/ttyUSB*` (or CAN, or UDP to MAVLink simulator).
-- Parses MAVLink, publishes compact status frames (mode, attitude summary, ack flags) into the inline 32 B payload.
-- Subscribes to a command route from the controller (peer 2) and writes commands back to the MCU.
+- Separate binary, opens `/dev/ttyTHS*` on Jetson or `/dev/ttyUSB*` on x86 dev (or UDP to a MAVLink simulator like ArduPilot SITL / PX4 SITL).
+- Parses MAVLink v2, packs the relevant fields of each message into the 32 B inline payload using a schema documented in `frame_layout.h`; puts the MAVLink `msgid` in `RouterFrame.topic_id` so subscribers dispatch without re-parsing MAVLink.
+- Subscribes to a command route from the controller (peer 2) and translates each received `RouterFrame` back into a MAVLink message it writes to the UART. Rate-limits to the MCU's actual ingest rate — the router is rate-agnostic.
 - Optional secondary UDP listener for ground-station tools (QGroundControl); that listener is **inside the gateway**, not in the router.
+- `mavlink_bulk` sideband region per [ADR 0005](adr/0005-payload-policy-and-sideband.md) is optional for parameter dumps / log replay that exceed the inline 32 B; F4 baseline omits it.
 
 ### Recorder (`recorder`, peer 3) — shipped
 
@@ -286,5 +289,5 @@ The [`shm_leak_check.sh`](../robotics-ipc-module/scripts/shm_leak_check.sh) scri
 | Bridge pointers / scaffolding | [examples/bridges/](../examples/bridges/) (Phase E E3 scaffolding) |
 | Timestamp clock | [ADR 0010](adr/0010-router-timestamp-clock.md) — `CLOCK_MONOTONIC_RAW` single-host; cross-host delegated (Phase E E4) |
 | Profile templates + `deployment-profiles.md` | [docs/deployment-profiles.md](deployment-profiles.md) — Phase F F1 + F2 + closed C5 Scopes A + B (4 profiles × 7 peers; routes fan out to up to `kMaxRouteDests = 8`; optional `[[topics]]` registry; only the single-transport-per-router limitation remains open, cross-referenced to parked C11) |
-| Python / Node / MAVLink / vision peer code | [Phase F F2–F5](../robotics-ipc-module/plans/F-interoperability-bridges.md) (F2 shipped in [`examples/bridges/python_peer/`](../examples/bridges/python_peer/); F3 shipped in [`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/); F4/F5 are README-only stubs awaiting implementation) |
+| Python / Node / MAVLink / vision peer code | [Phase F F2–F5](../robotics-ipc-module/plans/F-interoperability-bridges.md) (F2 shipped in [`examples/bridges/python_peer/`](../examples/bridges/python_peer/); F3 shipped in [`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/); F4 shipped as interface + [ADR 0011](adr/0011-device-bridge-transports.md) in [`examples/bridges/mavlink_gateway/`](../examples/bridges/mavlink_gateway/) per the F4 plan's "interface + ADR stub" deliverable shape; F5 is a README-only stub awaiting implementation) |
 | Open considerations (TensorRT contract depth, CUDA `memory_class`, ARM CI, playback peer, declarative-transport extensions, RT pinning, cross-host time, camera shape, consumption model) | [plans/post-phases-robotics-review.md](../robotics-ipc-module/plans/post-phases-robotics-review.md) |

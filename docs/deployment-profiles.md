@@ -27,7 +27,7 @@ All four profiles declare the same seven peers, with stable IDs per the [SYSTEM-
 | 7 | `python_tooling` | **Implemented — Phase F F2** ([`examples/bridges/python_peer/`](../examples/bridges/python_peer/)) | Python subscriber / publisher; UDS today, ctypes RouterFrame port |
 | 8 | `dashboard_feed` | **Implemented** — Phase F F3 ([`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/)) | Node UDP → WebSocket gateway (stdlib only, no `npm install`); reachable on UDP profiles (`hil.toml`, `sim_cloud.toml`); UDS / SHM reachability tracked under parked C11 |
 
-**Peer ID 6 (`mavlink_gateway`) is intentionally absent until F4.** The profile files leave room (port 19106 in `hil.toml`, address `10.0.0.7` in `sim_cloud.toml`) so adding it later does not require renumbering.
+**Peer ID 6 (`mavlink_gateway`) is intentionally absent until the F4 working binary lands.** The profile files leave room (port 19106 in `hil.toml`, address `10.0.0.7` in `sim_cloud.toml`, the obvious UDS path slot in `x86_dev.toml`, the SHM region name slot in `jetson_prod.toml`) so adding it later does not require renumbering. The F4 interface contract is locked — see [ADR 0011](adr/0011-device-bridge-transports.md) for the transport choice (UDS `SOCK_DGRAM`) and [`examples/bridges/mavlink_gateway/README.md`](../examples/bridges/mavlink_gateway/README.md) for the profile delta the working binary will append.
 
 ## Route topology
 
@@ -183,7 +183,7 @@ With C5 Scope A landed, every compute-side rule now lists `dashboard_feed` as a 
 
 ### Peer 6 absent
 
-`mavlink_gateway` (6) is a reserved ID in the [8-peer catalog](robotics-reference-layout.md#peer-catalog) but not declared yet. F4 will append it — the four profile files leave port / address ranges open. `python_tooling` (7) was added in F2 — see [`examples/bridges/python_peer/`](../examples/bridges/python_peer/).
+`mavlink_gateway` (6) is a reserved ID in the [8-peer catalog](robotics-reference-layout.md#peer-catalog); F4 shipped the interface contract + [ADR 0011](adr/0011-device-bridge-transports.md) (transport selection rationale for UART/MAVLink + SPI + I²C + CAN bridges) but defers the working binary per the F plan. When the binary lands, all four profile files will append peer 6 — port / address ranges are already left open. `python_tooling` (7) was added in F2 — see [`examples/bridges/python_peer/`](../examples/bridges/python_peer/).
 
 ## Resource-name conventions
 
@@ -255,7 +255,8 @@ When deploying to a new host:
 |-------|----------------|
 | Python bridge (peer 7) | **Phase F F2 implemented** — [`examples/bridges/python_peer/`](../examples/bridges/python_peer/) (UDS today; UDP variant deferred — see the bridge README) |
 | Node dashboard (peer 8) implementation | **Phase F F3 implemented** — [`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/) (UDP today, stdlib only; UDS / SHM tracked under parked C11) |
-| MAVLink gateway (peer 6) | Phase F F4; stub [`examples/bridges/mavlink_gateway/`](../examples/bridges/mavlink_gateway/) |
+| MAVLink gateway (peer 6) | **Phase F F4 interface + [ADR 0011](adr/0011-device-bridge-transports.md) shipped** — working binary deferred per the F4 plan; see [`examples/bridges/mavlink_gateway/README.md`](../examples/bridges/mavlink_gateway/README.md) for the locked interface |
+| Device-bridge transport selection (SPI / I²C / CAN / CAN-FD) | [ADR 0011](adr/0011-device-bridge-transports.md) — same ADR as F4, sibling sections; recommended bridges for downstream hardware-device integrations |
 | Vision + ML sideband `memory_class` parsing | Phase F F5; stub [`examples/bridges/vision_peer/`](../examples/bridges/vision_peer/) |
 | Mixed-transport router fanout (SHM + UDS + UDP from one router) | Parked review C11 — three options (factory bridge daemons / mixed-transport router / peer-side bridging) + decision rubric |
 | 2-destination cap, topic registry | **Closed 2026-05-28** — C5 Scopes A + B; see [§Topic registry](#topic-registry-optional) above and [parked review C5](../robotics-ipc-module/plans/post-phases-robotics-review.md#c5--declarative-transport-layer-gaps) |

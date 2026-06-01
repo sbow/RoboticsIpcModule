@@ -35,7 +35,7 @@ Scopes A and B were close-out work. Scope C is a routing-primitive change — it
 
 ### G1 — ADR: per-topic routing as a dispatch key
 
-`docs/adr/0011-per-topic-routing.md` (or next-available number). Records:
+`docs/adr/0012-per-topic-routing.md` (next-available — ADR 0011 was taken by [device-bridge transports](../../docs/adr/0011-device-bridge-transports.md) during F4, 2026-05-31). Records:
 
 - The dispatch-key change (source → (source, topic_id)).
 - Why first-match-wins is preserved.
