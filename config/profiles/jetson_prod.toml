@@ -23,14 +23,18 @@
 # RouterFrame v2 (ADR 0008), so `shm_max_payload = 64` sizes each slot stride
 # to one cache line. With 256 slots, each peer's SHM region is ~35 KiB — a
 # ~15× reduction vs. the legacy 1024 B slot default. Sideband regions (under
-# `[[peers.sideband]]`) carry bulk data and have their own sizing (ADR 0005).
+# `[[peers.sideband]]`) carry bulk data and have their own sizing (ADR 0005)
+# and a memory_class (ADR 0008/0012, F5): on Orin the vision region is
+# nvbufsurface (DMA-buf from Argus / V4L2) and the ML tensors are
+# cuda_managed (unified memory for the TensorRT pipeline). x86_dev.toml
+# carries the same logical sidebands with memory_class = shm (no iGPU).
 #
 # Peer catalog (SYSTEM-VISION.md + docs/robotics-reference-layout.md):
 #   1 sensor         — IMU / proprioceptive aggregate; small periodic frames
 #   2 controller     — control loop; commands; subscribes sensor + ml
 #   3 recorder       — black-box log; CSV today; subscribe-all via routes
-#   4 vision_capture — metadata frames + sideband (NV12 / JPEG on rim_vision_nv12)         — F5
-#   5 ml_inference   — metadata frames + sideband (tensor in/out on rim_ml_tensor_in/out)  — F5
+#   4 vision_capture — metadata frames + nvbufsurface sideband (NV12 on rim_vision_nv12)    — F5
+#   5 ml_inference   — metadata frames + cuda_managed sideband (tensor in/out)              — F5
 #   7 python_tooling — Python bridge (examples/bridges/python_peer/)                       — F2
 #   8 dashboard_feed — Node WebSocket gateway sink                                          — F3
 #
@@ -52,6 +56,7 @@
 #      docs/adr/0005-payload-policy-and-sideband.md,
 #      docs/adr/0008-router-frame-v2.md,
 #      docs/adr/0009-per-peer-ring-sizing.md,
+#      docs/adr/0012-sideband-memory-class.md,
 #      SYSTEM-VISION.md.
 
 [router]
@@ -84,10 +89,17 @@ shm_max_payload = 64                 # bulk pixel data lives in the sideband bel
   # vision_capture writes pixel data here, encodes the slot index into the
   # outbound RouterFrame's sideband_seq, and subscribers (ml_inference,
   # recorder) read the slot by indexing into this region.
+  #
+  # memory_class = nvbufsurface (ADR 0008/0012, F5): on Orin, Argus / V4L2
+  # hand out NvBufSurface (DMA-buf) frames. A GPU consumer (ml_inference)
+  # imports the buffer zero-copy; a CPU consumer (recorder) maps it via the
+  # surface's mapped CPU pointer. cuda_device = 0 = the integrated iGPU.
   [[peers.sideband]]
   class             = "vision_nv12"
   name              = "/rim_vision_nv12"
   max_payload_bytes = 8388608        # 8 MB — one 1080p NV12 frame fits
+  memory_class      = "nvbufsurface"
+  cuda_device       = 0
 
 [[peers]]
 id              = 5
@@ -99,15 +111,24 @@ shm_max_payload = 64
   # ML tensor sidebands — separate SHM segments (ADR 0005). Two regions:
   # one for the input tensor handed off from vision_capture, one for the
   # inference output handed back to controller.
+  #
+  # memory_class = cuda_managed (ADR 0008/0012, F5): the TensorRT pipeline
+  # (parked C1) wants the input/output tensors in unified memory so the GPU
+  # reads them without an explicit host->device copy and the controller can
+  # read the result on the CPU side. cuda_device = 0 = the integrated iGPU.
   [[peers.sideband]]
   class             = "ml_tensor_in"
   name              = "/rim_ml_tensor_in"
   max_payload_bytes = 16777216       # 16 MB
+  memory_class      = "cuda_managed"
+  cuda_device       = 0
 
   [[peers.sideband]]
   class             = "ml_tensor_out"
   name              = "/rim_ml_tensor_out"
   max_payload_bytes = 4194304        # 4 MB — typical model output is smaller
+  memory_class      = "cuda_managed"
+  cuda_device       = 0
 
 # --- IO-side peers (subscribers + bridges) -------------------------------
 # These would prefer non-SHM transport in production (recorder writes

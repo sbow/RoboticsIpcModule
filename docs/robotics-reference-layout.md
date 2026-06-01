@@ -40,8 +40,8 @@ Peer IDs are byte-valued (1–255) and stable across deployment profiles per the
 | 1 | `sensor` | Proprioceptive / IMU aggregate; periodic publish | `topic_id`, `seq`, ≤32 B payload | none | Demo binary (`router_client sensor`) |
 | 2 | `controller` | Control loop; subscribes sensor, publishes commands | `topic_id`, `seq`, ≤32 B payload | optional (see `jetson_prod.toml`) | Demo binary (`router_client controller`) |
 | 3 | `recorder` | Black-box log; subscribe-all | reads everything; writes log | none | Demo binary (`router_client recorder`); CSV format — **not playback-compatible** (see C4 in parked review) |
-| 4 | `vision_capture` | CSI/V4L camera pipeline | metadata only (`topic_id`, `seq`, `timestamp_ns`, sideband descriptor) | NV12 / JPEG via SHM region | **Sketch only** — Phase F F5 |
-| 5 | `ml_inference` | CUDA inference (e.g. TensorRT) | metadata + tensor descriptor | input + output tensors via SHM region | **Sketch only** — Phase F F5; CUDA-class sidebands deferred to Phase F |
+| 4 | `vision_capture` | CSI/V4L camera pipeline | metadata only (`topic_id`, `seq`, `timestamp_ns`, sideband descriptor) | NV12 / JPEG via sideband region (`nvbufsurface` on Jetson, `shm` on x86) | **Interface + `memory_class` parser ([ADR 0012](adr/0012-sideband-memory-class.md))** — Phase F F5; capture binary deferred |
+| 5 | `ml_inference` | CUDA inference (e.g. TensorRT) | metadata + tensor descriptor | input + output tensors via sideband region (`cuda_managed` on Jetson, `shm` on x86) | **Interface + `memory_class` parser ([ADR 0012](adr/0012-sideband-memory-class.md))** — Phase F F5; TensorRT engine deferred (parked C1) |
 | 6 | `mavlink_gateway` | MCU bridge over UART (MAVLink v2 stream parsed → one RouterFrame per message) | compact status frames (mode, attitude, ack) | optional `mavlink_bulk` for param dumps | **Interface + ADR ([0011](adr/0011-device-bridge-transports.md))** — Phase F F4; binary deferred ([`examples/bridges/mavlink_gateway/`](../examples/bridges/mavlink_gateway/)) |
 | 7 | `python_tooling` | Training / scripts; offline batch | matches v2 frame layout via ctypes | optional | **Implemented** — Phase F F2 ([`examples/bridges/python_peer/`](../examples/bridges/python_peer/)) |
 | 8 | `dashboard_feed` | Node UDP → WebSocket gateway (stdlib, no `npm install`) | reads everything; forwards to browser as JSON | none | **Implemented** — Phase F F3 ([`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/)) |
@@ -126,7 +126,7 @@ flowchart LR
 **Notes.**
 
 - No SHM means no `/dev/shm/rim_*` artifacts to clean up; just delete `/tmp/rim_router_*.sock` if a process crashes mid-bind. The router unlinks-then-binds, so a fresh start is enough in most cases.
-- Sideband region examples in `jetson_prod.toml` do not apply here unless the developer explicitly adds `[[peers.sideband]]` entries — UDS-only profiles can still describe sideband regions; the regions are SHM segments independent of the control transport.
+- `x86_dev.toml` declares the same `vision_capture` (4) and `ml_inference` (5) sideband regions as `jetson_prod.toml`, but with `memory_class = "shm"` (a dev laptop has no Orin iGPU / NvBufSurface). This demonstrates the [ADR 0012](adr/0012-sideband-memory-class.md) point: sideband regions are SHM/host segments **independent of the control transport** (UDS here), and only the `memory_class` differs between the dev and prod profiles — the bridge code is identical.
 
 ### HIL bench
 
@@ -153,7 +153,7 @@ The router stays transport-only. Every domain integration (camera, ML, serial) i
 
 ### Vision capture (`vision_capture`, peer 4)
 
-**Status:** sketch only — stub at [`examples/bridges/vision_peer/`](../examples/bridges/vision_peer/); implementation lands in [F5](../robotics-ipc-module/plans/F-interoperability-bridges.md#f5--vision-metadata-peer-sketch). The reference layout below is the contract a user-written `vision_capture` peer should follow.
+**Status:** interface + `memory_class` parser shipped 2026-05-31 ([ADR 0012](adr/0012-sideband-memory-class.md), Phase F F5); the camera capture binary is deferred (it needs Argus / V4L2 / CUDA SDKs the core excludes per [ADR 0004](adr/0004-robotics-module-boundaries.md)). See [`examples/bridges/vision_peer/README.md`](../examples/bridges/vision_peer/README.md) for the full F5 interface. The reference layout below is the contract a user-written `vision_capture` peer should follow.
 
 **Process shape.**
 
@@ -173,25 +173,27 @@ The router stays transport-only. Every domain integration (camera, ML, serial) i
 | `sideband_len` | Bytes valid in the slot (`u48`, up to 256 TB) |
 | Inline 32 B payload | Compact metadata: width, height, exposure, drop counter — **not** pixel data |
 
-**Sideband region.** Configured in topology TOML under the peer's `[[peers.sideband]]` block. Example (from [`jetson_prod.toml`](../config/profiles/jetson_prod.toml) controller entry):
+**Sideband region.** Configured in topology TOML under the peer's `[[peers.sideband]]` block. Example (from [`jetson_prod.toml`](../config/profiles/jetson_prod.toml) vision_capture entry):
 
 ```toml
 [[peers.sideband]]
 class             = "vision_nv12"
-name              = "/robot_vision_nv12"
+name              = "/rim_vision_nv12"
 max_payload_bytes = 8388608
+memory_class      = "nvbufsurface"   # ADR 0012 — Argus / V4L2 DMA-buf
+cuda_device       = 0                # integrated GPU
 ```
 
-Today only `name` / `max_payload_bytes` / optional `version` are parsed; `class` is informational. CUDA-class sidebands (`memory_class = "cuda_managed"` / `"nvbufsurface"`) are forward-declared in [ADR 0008](adr/0008-router-frame-v2.md) and land in Phase F (see [parked review C2](../robotics-ipc-module/plans/post-phases-robotics-review.md#c2--cuda--sideband-memory_class-parsing)).
+`name` / `max_payload_bytes` / optional `version` / **`memory_class`** / **`cuda_device`** are all parsed by the loader. `class` remains informational. The `memory_class` field — `shm` (default) / `cuda_managed` / `cuda_host` / `nvbufsurface` — was forward-declared in [ADR 0008](adr/0008-router-frame-v2.md) and is **realized as of [ADR 0012](adr/0012-sideband-memory-class.md)** (Phase F F5, closing the loader portion of [parked review C2](../robotics-ipc-module/plans/post-phases-robotics-review.md#c2--cuda--sideband-memory_class-parsing)). A consumer reads `memory_class` from the topology entry its `sideband_idx` points at and picks the access path: `shm` → `mmap`; `cuda_managed` → dereference the managed pointer; `cuda_host` → pinned host pointer; `nvbufsurface` → `cudaImportExternalMemory` the DMA-buf (GPU) or the surface's mapped CPU pointer. The same bridge binary runs on `x86_dev.toml` (`memory_class = "shm"`) and `jetson_prod.toml` (`nvbufsurface`) with no code change — the GPU mapping code (which links CUDA) stays in the deferred capture binary, never in `ipc/src/`.
 
 ### ML inference (`ml_inference`, peer 5)
 
-**Status:** sketch only — co-resident with the vision peer stub at [`examples/bridges/vision_peer/`](../examples/bridges/vision_peer/) for now (F5 covers both peers' contract surface). TensorRT / CUDA engine implementation is the **user's** code; the module provides transport for the input/output tensors.
+**Status:** interface + `memory_class` parser shipped (F5, [ADR 0012](adr/0012-sideband-memory-class.md)) — co-resident with the vision peer stub at [`examples/bridges/vision_peer/`](../examples/bridges/vision_peer/) (F5 covers both peers' contract surface). The `ml_tensor_in` / `ml_tensor_out` sidebands declare `memory_class = "cuda_managed"` on `jetson_prod.toml`. TensorRT / CUDA engine implementation is the **user's** code (parked [C1](../robotics-ipc-module/plans/post-phases-robotics-review.md#c1--tensorrt-integration-contract)); the module provides transport for the input/output tensors and the memory-class vocabulary to access them.
 
 **Process shape.**
 
 - Separate binary. Subscribes to vision metadata frames from peer 4 (or directly from the route configured for ML).
-- For each frame: maps the sideband region indexed by `frame.sideband_idx()`, reads `sideband_seq` to find the slot, copies (or zero-copies on Jetson once CUDA `memory_class` lands) the input tensor.
+- For each frame: maps the sideband region indexed by `frame.sideband_idx()`, reads `sideband_seq` to find the slot, then copies or zero-copies the input tensor according to the region's `memory_class` ([ADR 0012](adr/0012-sideband-memory-class.md) — `cuda_managed` on Jetson enables the zero-copy path; `shm` on x86 dev is a CPU `memcpy`).
 - Runs inference.
 - Publishes a result `RouterFrame` with inline metadata (class id, confidence, latency_ns) and writes the full output tensor into a separate sideband region (`ml_tensor_out`).
 
@@ -289,5 +291,5 @@ The [`shm_leak_check.sh`](../robotics-ipc-module/scripts/shm_leak_check.sh) scri
 | Bridge pointers / scaffolding | [examples/bridges/](../examples/bridges/) (Phase E E3 scaffolding) |
 | Timestamp clock | [ADR 0010](adr/0010-router-timestamp-clock.md) — `CLOCK_MONOTONIC_RAW` single-host; cross-host delegated (Phase E E4) |
 | Profile templates + `deployment-profiles.md` | [docs/deployment-profiles.md](deployment-profiles.md) — Phase F F1 + F2 + closed C5 Scopes A + B (4 profiles × 7 peers; routes fan out to up to `kMaxRouteDests = 8`; optional `[[topics]]` registry; only the single-transport-per-router limitation remains open, cross-referenced to parked C11) |
-| Python / Node / MAVLink / vision peer code | [Phase F F2–F5](../robotics-ipc-module/plans/F-interoperability-bridges.md) (F2 shipped in [`examples/bridges/python_peer/`](../examples/bridges/python_peer/); F3 shipped in [`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/); F4 shipped as interface + [ADR 0011](adr/0011-device-bridge-transports.md) in [`examples/bridges/mavlink_gateway/`](../examples/bridges/mavlink_gateway/) per the F4 plan's "interface + ADR stub" deliverable shape; F5 is a README-only stub awaiting implementation) |
+| Python / Node / MAVLink / vision peer code | [Phase F F2–F5](../robotics-ipc-module/plans/F-interoperability-bridges.md) (F2 shipped in [`examples/bridges/python_peer/`](../examples/bridges/python_peer/); F3 shipped in [`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/); F4 shipped as interface + [ADR 0011](adr/0011-device-bridge-transports.md) in [`examples/bridges/mavlink_gateway/`](../examples/bridges/mavlink_gateway/); F5 shipped the `memory_class` parser + [ADR 0012](adr/0012-sideband-memory-class.md) + interface in [`examples/bridges/vision_peer/`](../examples/bridges/vision_peer/) — the camera capture + CUDA mapping binaries remain user/downstream code per ADR 0004) |
 | Open considerations (TensorRT contract depth, CUDA `memory_class`, ARM CI, playback peer, declarative-transport extensions, RT pinning, cross-host time, camera shape, consumption model) | [plans/post-phases-robotics-review.md](../robotics-ipc-module/plans/post-phases-robotics-review.md) |

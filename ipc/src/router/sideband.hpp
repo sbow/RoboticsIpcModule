@@ -62,6 +62,59 @@ constexpr const char* kSidebandClassMlInput     = "ml_tensor_in";
 constexpr const char* kSidebandClassMlOutput    = "ml_tensor_out";
 constexpr const char* kSidebandClassMavlinkBulk = "mavlink_bulk";
 
+// Memory class of a sideband region's backing allocation. ADR 0008
+// forward-declared this field; ADR 0012 (Phase F F5) realizes it in the
+// topology loader. It tells a *consumer* which access strategy the region
+// requires — a deployment-time contract, recorded in topology, never in the
+// frame. The frame stays a stupid pointer (sideband_idx + sideband_seq); the
+// topology entry it indexes carries the memory class.
+//
+// IMPORTANT (ADR 0004 / ADR 0012 boundary): this enum is just a tag. The
+// header-only IPC core records and reports it but links NO CUDA / NvBuffer
+// headers. Only a bridge or consumer process that actually maps GPU memory
+// links those SDKs; it reads this tag to pick the right path.
+enum class SidebandMemoryClass : uint8_t {
+    Shm          = 0,  // plain CPU shared memory (shm_open + mmap). Default.
+    CudaManaged  = 1,  // cudaMallocManaged — unified, page-migrated on access.
+    CudaHost     = 2,  // cudaHostAlloc — pinned host memory, DMA-friendly.
+    NvBufSurface = 3,  // NvBufSurface / DMA-buf (V4L2, Argus, DeepStream).
+};
+
+// Canonical TOML spelling of each memory class. Round-trips with
+// parse_sideband_memory_class().
+inline const char* sideband_memory_class_name(SidebandMemoryClass mc) {
+    switch (mc) {
+        case SidebandMemoryClass::Shm:          return "shm";
+        case SidebandMemoryClass::CudaManaged:  return "cuda_managed";
+        case SidebandMemoryClass::CudaHost:     return "cuda_host";
+        case SidebandMemoryClass::NvBufSurface: return "nvbufsurface";
+    }
+    return "shm";
+}
+
+// Parse a TOML memory_class string. Returns true + sets `out` on a known
+// spelling; returns false (leaving `out` untouched) on anything else, so the
+// caller can produce a config-specific error. No allocation, no throw.
+inline bool parse_sideband_memory_class(const char* s, SidebandMemoryClass& out) {
+    if (s == nullptr) return false;
+    if (std::strcmp(s, "shm")          == 0) { out = SidebandMemoryClass::Shm;          return true; }
+    if (std::strcmp(s, "cuda_managed") == 0) { out = SidebandMemoryClass::CudaManaged;  return true; }
+    if (std::strcmp(s, "cuda_host")    == 0) { out = SidebandMemoryClass::CudaHost;     return true; }
+    if (std::strcmp(s, "nvbufsurface") == 0) { out = SidebandMemoryClass::NvBufSurface; return true; }
+    return false;
+}
+
+// True for memory classes that live on / are bound to a GPU and therefore
+// MAY carry a cuda_device index. `shm` is the only CPU class. Consumers use
+// this to decide whether a zero-copy GPU path is even possible.
+inline bool sideband_memory_class_is_gpu(SidebandMemoryClass mc) {
+    return mc != SidebandMemoryClass::Shm;
+}
+
+// Sentinel for "no CUDA device pinned" — used by SidebandRegion::cuda_device
+// when the memory class is CPU (shm) or the operator left the field implicit.
+constexpr int kSidebandCudaDeviceUnset = -1;
+
 // Descriptor a router peer publishes / consumes. The 22 B RouterFrame payload
 // MAY carry a small reference (frame_id, sequence) that points consumers at
 // the right SidebandRegion. The descriptor itself is configuration / topology
@@ -80,6 +133,17 @@ struct SidebandRegion {
     // Wire / layout version the producer commits to. Must match
     // kSidebandVersion for ADR-0005-compliant regions.
     uint32_t version = kSidebandVersion;
+
+    // Backing-memory class of this region (ADR 0008 forward declaration,
+    // realized in ADR 0012 / F5). Defaults to plain CPU SHM, which is what
+    // every region was implicitly before this field existed — so older
+    // profiles that omit memory_class keep their exact behaviour.
+    SidebandMemoryClass memory_class = SidebandMemoryClass::Shm;
+
+    // CUDA / NvBufSurface device ordinal, when the memory class is GPU-backed.
+    // kSidebandCudaDeviceUnset (-1) means "not pinned to a specific device".
+    // The loader rejects a non-default value on a `shm` region.
+    int cuda_device = kSidebandCudaDeviceUnset;
 };
 
 // Initialize the in-region header (producer-side helper). Caller is

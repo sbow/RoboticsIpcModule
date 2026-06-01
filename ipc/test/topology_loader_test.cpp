@@ -124,11 +124,15 @@ local = "shm:/router_controller"
   class             = "vision_nv12"
   name              = "/robot_vision_nv12"
   max_payload_bytes = 8388608
+  memory_class      = "nvbufsurface"
+  cuda_device       = 0
 
   [[peers.sideband]]
   class             = "ml_tensor_in"
   name              = "/robot_ml_tensor_in"
   max_payload_bytes = 16777216
+  memory_class      = "cuda_managed"
+  cuda_device       = 1
 
 [[peers]]
 id    = 3
@@ -138,6 +142,23 @@ local = "shm:/router_recorder"
 [[routes]]
 source = 1
 dest   = [2, 3]
+)";
+
+// memory_class omitted entirely -> defaults to shm; a shm region with no
+// cuda_device stays at the unset sentinel.
+constexpr const char* kSidebandDefaultMemoryClass = R"(
+[router]
+listen = "shm:/router_a"
+
+[[peers]]
+id    = 1
+name  = "sensor"
+local = "shm:/router_sensor"
+
+  [[peers.sideband]]
+  class             = "vision_nv12"
+  name              = "/robot_vision_nv12"
+  max_payload_bytes = 8388608
 )";
 
 constexpr const char* kValidUdp = R"(
@@ -207,9 +228,17 @@ void test_valid_shm_with_sideband() {
         EXPECT_EQ(controller_sb[0].max_payload_bytes,
                   static_cast<std::size_t>(8388608));
         EXPECT_EQ(controller_sb[0].version, kSidebandVersion);
+        // ADR 0008/0012 — memory_class + cuda_device parsed.
+        EXPECT(controller_sb[0].memory_class == SidebandMemoryClass::NvBufSurface);
+        EXPECT_EQ(controller_sb[0].cuda_device, 0);
+        EXPECT(sideband_memory_class_is_gpu(controller_sb[0].memory_class));
+        EXPECT_STREQ(sideband_memory_class_name(controller_sb[0].memory_class),
+                     "nvbufsurface");
         EXPECT_STREQ(controller_sb[1].name, "/robot_ml_tensor_in");
         EXPECT_EQ(controller_sb[1].max_payload_bytes,
                   static_cast<std::size_t>(16777216));
+        EXPECT(controller_sb[1].memory_class == SidebandMemoryClass::CudaManaged);
+        EXPECT_EQ(controller_sb[1].cuda_device, 1);
     }
 
     // Peers without sideband entries report count 0.
@@ -217,6 +246,106 @@ void test_valid_shm_with_sideband() {
     const SidebandRegion* sensor_sb = topo.sidebands_for(1, sensor_sb_count);
     EXPECT_EQ(sensor_sb_count, static_cast<std::size_t>(0));
     EXPECT(sensor_sb == nullptr);
+}
+
+void test_sideband_memory_class_defaults_to_shm() {
+    // ADR 0008/0012 — a sideband with no memory_class field keeps the
+    // pre-F5 behaviour: plain CPU SHM, cuda_device unset. This is what
+    // guarantees older profiles load identically.
+    LoadedTopology topo =
+        load_topology_from_toml_string(kSidebandDefaultMemoryClass);
+    std::size_t count = 0;
+    const SidebandRegion* sb = topo.sidebands_for(1, count);
+    EXPECT_EQ(count, static_cast<std::size_t>(1));
+    if (count == 1) {
+        EXPECT(sb[0].memory_class == SidebandMemoryClass::Shm);
+        EXPECT_EQ(sb[0].cuda_device, kSidebandCudaDeviceUnset);
+        EXPECT(!sideband_memory_class_is_gpu(sb[0].memory_class));
+        EXPECT_STREQ(sideband_memory_class_name(sb[0].memory_class), "shm");
+    }
+}
+
+void test_sideband_memory_class_round_trips() {
+    // Pure helper round-trip — parse(name(x)) == x for every enum value.
+    const SidebandMemoryClass all[] = {
+        SidebandMemoryClass::Shm,
+        SidebandMemoryClass::CudaManaged,
+        SidebandMemoryClass::CudaHost,
+        SidebandMemoryClass::NvBufSurface,
+    };
+    for (SidebandMemoryClass mc : all) {
+        SidebandMemoryClass back = SidebandMemoryClass::Shm;
+        EXPECT(parse_sideband_memory_class(sideband_memory_class_name(mc), back));
+        EXPECT(back == mc);
+    }
+    SidebandMemoryClass dummy = SidebandMemoryClass::Shm;
+    EXPECT(!parse_sideband_memory_class("gpu", dummy));
+    EXPECT(!parse_sideband_memory_class(nullptr, dummy));
+}
+
+void test_sideband_memory_class_errors() {
+    // Unknown spelling is a hard error (typo must not silently fall back
+    // to shm and break a GPU consumer).
+    expect_load_error(R"(
+[router]
+listen = "shm:/router_a"
+[[peers]]
+id    = 1
+name  = "a"
+local = "shm:/router_a_peer"
+  [[peers.sideband]]
+  class             = "vision_nv12"
+  name              = "/robot_v"
+  max_payload_bytes = 1024
+  memory_class      = "cuda_unified"
+)", "unknown memory_class");
+
+    // cuda_device on a shm (CPU) region is a configuration error.
+    expect_load_error(R"(
+[router]
+listen = "shm:/router_a"
+[[peers]]
+id    = 1
+name  = "a"
+local = "shm:/router_a_peer"
+  [[peers.sideband]]
+  class             = "vision_nv12"
+  name              = "/robot_v"
+  max_payload_bytes = 1024
+  memory_class      = "shm"
+  cuda_device       = 0
+)", "cuda_device is only valid for GPU-backed");
+
+    // cuda_device implicitly on the default shm class is also rejected.
+    expect_load_error(R"(
+[router]
+listen = "shm:/router_a"
+[[peers]]
+id    = 1
+name  = "a"
+local = "shm:/router_a_peer"
+  [[peers.sideband]]
+  class             = "vision_nv12"
+  name              = "/robot_v"
+  max_payload_bytes = 1024
+  cuda_device       = 0
+)", "cuda_device is only valid for GPU-backed");
+
+    // cuda_device out of range on a GPU class.
+    expect_load_error(R"(
+[router]
+listen = "shm:/router_a"
+[[peers]]
+id    = 1
+name  = "a"
+local = "shm:/router_a_peer"
+  [[peers.sideband]]
+  class             = "vision_nv12"
+  name              = "/robot_v"
+  max_payload_bytes = 1024
+  memory_class      = "cuda_managed"
+  cuda_device       = 999
+)", "cuda_device 999 out of range");
 }
 
 void test_valid_udp() {
@@ -443,6 +572,28 @@ void test_shm_ring_sizing_jetson_profile_demonstrates_recommended_values() {
         EXPECT(p.local.kind == PeerAddressKind::ShmRing);
         EXPECT_EQ(p.shm_slot_count,  static_cast<uint32_t>(256));
         EXPECT_EQ(p.shm_max_payload, static_cast<uint32_t>(kRouterFrameSize));
+    }
+
+    // ADR 0008/0012 (F5) — the shipped jetson_prod.toml demonstrates the
+    // GPU memory classes: vision_capture (4) stages NV12 in an NvBufSurface
+    // region; ml_inference (5) uses cuda_managed for both tensor regions.
+    // Guards against a profile edit that silently drops the GPU tag and
+    // forces consumers onto the CPU path.
+    std::size_t vis_sb_count = 0;
+    const SidebandRegion* vis_sb = topo.sidebands_for(4, vis_sb_count);
+    EXPECT_EQ(vis_sb_count, static_cast<std::size_t>(1));
+    if (vis_sb_count == 1) {
+        EXPECT(vis_sb[0].memory_class == SidebandMemoryClass::NvBufSurface);
+        EXPECT_EQ(vis_sb[0].cuda_device, 0);
+    }
+    std::size_t ml_sb_count = 0;
+    const SidebandRegion* ml_sb = topo.sidebands_for(5, ml_sb_count);
+    EXPECT_EQ(ml_sb_count, static_cast<std::size_t>(2));
+    if (ml_sb_count == 2) {
+        EXPECT(ml_sb[0].memory_class == SidebandMemoryClass::CudaManaged);
+        EXPECT(ml_sb[1].memory_class == SidebandMemoryClass::CudaManaged);
+        EXPECT_EQ(ml_sb[0].cuda_device, 0);
+        EXPECT_EQ(ml_sb[1].cuda_device, 0);
     }
 }
 
@@ -753,6 +904,11 @@ int main() {
     test_load_from_file();
     test_move_preserves_interned_pointers();
     test_errors();
+
+    // ADR 0008/0012 (F5) — sideband memory_class realization.
+    test_sideband_memory_class_defaults_to_shm();
+    test_sideband_memory_class_round_trips();
+    test_sideband_memory_class_errors();
 
     // ADR 0009 — per-peer SHM ring sizing.
     test_shm_ring_sizing_defaults_when_absent();

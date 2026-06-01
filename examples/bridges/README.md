@@ -11,7 +11,7 @@ This directory holds **bridge processes** that interoperate with the C++ router 
 | [`python_peer/`](python_peer/) | 7 | Python subscriber/publisher matching the v2 frame layout (UDS, ctypes) | **Implemented** | F2 |
 | [`node_gateway/`](node_gateway/) | 8 | UDP → WebSocket gateway for browser dashboards (stdlib only) | **Implemented** | F3 |
 | [`mavlink_gateway/`](mavlink_gateway/) | 6 | Serial / MAVLink ↔ router status frames | **Interface + ADR ([0011](../../docs/adr/0011-device-bridge-transports.md))** — binary deferred per F4 plan | F4 |
-| [`vision_peer/`](vision_peer/) | 4 | CSI / V4L2 vision metadata + sideband NV12 / JPEG | **Sketch only** | F5 |
+| [`vision_peer/`](vision_peer/) | 4 | CSI / V4L2 vision metadata + sideband NV12 / JPEG | **Interface + `memory_class` parser ([ADR 0012](../../docs/adr/0012-sideband-memory-class.md))** — capture binary deferred | F5 |
 
 ## Principles (from [ADR 0004](../../docs/adr/0004-robotics-module-boundaries.md))
 
@@ -63,4 +63,5 @@ Phase E ships the **deployment contract** (peer catalog, frame fields, sideband 
 - [docs/adr/0005-payload-policy-and-sideband.md](../../docs/adr/0005-payload-policy-and-sideband.md) — sideband classes (`vision_nv12`, `vision_jpeg`, `ml_tensor_in`, `ml_tensor_out`, `mavlink_bulk`)
 - [docs/adr/0008-router-frame-v2.md](../../docs/adr/0008-router-frame-v2.md) — wire layout that every bridge must mirror
 - [docs/adr/0011-device-bridge-transports.md](../../docs/adr/0011-device-bridge-transports.md) — transport-selection rationale for hardware-device bridges (UART/MAVLink, SPI, I²C, CAN / CAN-FD); the worked example for F4 lives in [`mavlink_gateway/`](mavlink_gateway/)
+- [docs/adr/0012-sideband-memory-class.md](../../docs/adr/0012-sideband-memory-class.md) — realizes the ADR 0008 `memory_class` forward declaration (`shm` / `cuda_managed` / `cuda_host` / `nvbufsurface`); the F5 [`vision_peer/`](vision_peer/) bridge and the ML tensor handoff consume it to pick a CPU vs GPU access path
 - [robotics-ipc-module/plans/post-phases-robotics-review.md](../../robotics-ipc-module/plans/post-phases-robotics-review.md) — open considerations parked for after Phase F closes (TensorRT contract depth, CUDA `memory_class`, replay peer, etc.)

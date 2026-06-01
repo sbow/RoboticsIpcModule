@@ -22,8 +22,8 @@ All four profiles declare the same seven peers, with stable IDs per the [SYSTEM-
 | 1 | `sensor` | Demo binary today | IMU / proprioceptive aggregate; small periodic frames |
 | 2 | `controller` | Demo binary today | Control loop; subscribes sensor + ml; publishes commands |
 | 3 | `recorder` | Demo binary today | Black-box log (CSV); subscribe-all via routes |
-| 4 | `vision_capture` | Sketch — Phase F F5 | CSI/V4L camera pipeline; metadata frames + NV12 sideband |
-| 5 | `ml_inference` | Sketch — Phase F F5 | CUDA / TensorRT engine; metadata frames + tensor sidebands |
+| 4 | `vision_capture` | Interface + `memory_class` parser ([ADR 0012](adr/0012-sideband-memory-class.md)) — Phase F F5; capture binary deferred | CSI/V4L camera pipeline; metadata frames + NV12 sideband (`nvbufsurface` on Jetson, `shm` on x86) |
+| 5 | `ml_inference` | Interface + `memory_class` parser ([ADR 0012](adr/0012-sideband-memory-class.md)) — Phase F F5; TensorRT engine deferred (parked C1) | CUDA engine; metadata frames + tensor sidebands (`cuda_managed` on Jetson, `shm` on x86) |
 | 7 | `python_tooling` | **Implemented — Phase F F2** ([`examples/bridges/python_peer/`](../examples/bridges/python_peer/)) | Python subscriber / publisher; UDS today, ctypes RouterFrame port |
 | 8 | `dashboard_feed` | **Implemented** — Phase F F3 ([`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/)) | Node UDP → WebSocket gateway (stdlib only, no `npm install`); reachable on UDP profiles (`hil.toml`, `sim_cloud.toml`); UDS / SHM reachability tracked under parked C11 |
 
@@ -96,15 +96,15 @@ Recorder (peer 3) remains the central "log + tap" point — every active source 
 
 **Per-peer ring sizing.** Every peer's control-plane ring is `shm_slot_count = 256`, `shm_max_payload = 64` (one `RouterFrame` v2 per slot). Each peer ring footprint is `64 + 2 × 256 × 68 ≈ 35 KiB` of `/dev/shm`.
 
-**Sideband regions.** Two peers declare sideband regions for bulk data (separate SHM segments, [ADR 0005](adr/0005-payload-policy-and-sideband.md)):
+**Sideband regions.** Two peers declare sideband regions for bulk data (separate segments, [ADR 0005](adr/0005-payload-policy-and-sideband.md)). The `memory_class` column ([ADR 0012](adr/0012-sideband-memory-class.md), F5) records the backing allocation so a consumer picks the right access path; the values below are from `jetson_prod.toml`:
 
-| Owner | Region | Size | Class | Purpose |
-|-------|--------|------|-------|---------|
-| `vision_capture` (4) | `/rim_vision_nv12` | 8 MiB | `vision_nv12` | One 1080p NV12 frame per slot |
-| `ml_inference` (5) | `/rim_ml_tensor_in` | 16 MiB | `ml_tensor_in` | Input tensor handed off from vision |
-| `ml_inference` (5) | `/rim_ml_tensor_out` | 4 MiB | `ml_tensor_out` | Inference output handed back to controller |
+| Owner | Region | Size | Class | `memory_class` (Jetson / x86) | Purpose |
+|-------|--------|------|-------|-------------------------------|---------|
+| `vision_capture` (4) | `/rim_vision_nv12` | 8 MiB | `vision_nv12` | `nvbufsurface` / `shm` | One 1080p NV12 frame per slot |
+| `ml_inference` (5) | `/rim_ml_tensor_in` | 16 MiB | `ml_tensor_in` | `cuda_managed` / `shm` | Input tensor handed off from vision |
+| `ml_inference` (5) | `/rim_ml_tensor_out` | 4 MiB | `ml_tensor_out` | `cuda_managed` / `shm` | Inference output handed back to controller |
 
-Sideband regions are **owned by the peer**, not the router. The bridge process (vision, ml) creates them with `shm_open` + `ftruncate`; the router transports the descriptors (`sideband_idx` / `sideband_seq` / `sideband_len`) in `RouterFrame` v2 fields and never reads the bulk bytes.
+Sideband regions are **owned by the peer**, not the router. The bridge process (vision, ml) creates them with `shm_open` + `ftruncate` (or an NvBufSurface / CUDA allocator on Jetson, per `memory_class`); the router transports the descriptors (`sideband_idx` / `sideband_seq` / `sideband_len`) in `RouterFrame` v2 fields and never reads the bulk bytes. The same `x86_dev.toml` declares these regions with `memory_class = "shm"` — the dev-laptop CPU path — so a bridge built once runs on both without code change (it reads `memory_class` from topology).
 
 **Cleanup.** Router unlinks-then-creates its own peer rings on bind. Sideband regions persist across router restarts; the [`rim-router-cleanup.sh`](../robotics-ipc-module/deploy/systemd/rim-router-cleanup.sh) helper called by `rim-router.service`'s `ExecStopPost=` proactively `rm -f`s the anticipated `/dev/shm/rim_router_*` and `/dev/shm/rim_vision_*` / `/dev/shm/rim_ml_*` names.
 
@@ -257,7 +257,7 @@ When deploying to a new host:
 | Node dashboard (peer 8) implementation | **Phase F F3 implemented** — [`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/) (UDP today, stdlib only; UDS / SHM tracked under parked C11) |
 | MAVLink gateway (peer 6) | **Phase F F4 interface + [ADR 0011](adr/0011-device-bridge-transports.md) shipped** — working binary deferred per the F4 plan; see [`examples/bridges/mavlink_gateway/README.md`](../examples/bridges/mavlink_gateway/README.md) for the locked interface |
 | Device-bridge transport selection (SPI / I²C / CAN / CAN-FD) | [ADR 0011](adr/0011-device-bridge-transports.md) — same ADR as F4, sibling sections; recommended bridges for downstream hardware-device integrations |
-| Vision + ML sideband `memory_class` parsing | Phase F F5; stub [`examples/bridges/vision_peer/`](../examples/bridges/vision_peer/) |
+| Vision + ML sideband `memory_class` parsing | **Phase F F5 shipped — [ADR 0012](adr/0012-sideband-memory-class.md)** (`shm` / `cuda_managed` / `cuda_host` / `nvbufsurface` parsed + validated in the topology loader); capture / CUDA mapping binaries deferred, see [`examples/bridges/vision_peer/`](../examples/bridges/vision_peer/) |
 | Mixed-transport router fanout (SHM + UDS + UDP from one router) | Parked review C11 — three options (factory bridge daemons / mixed-transport router / peer-side bridging) + decision rubric |
 | 2-destination cap, topic registry | **Closed 2026-05-28** — C5 Scopes A + B; see [§Topic registry](#topic-registry-optional) above and [parked review C5](../robotics-ipc-module/plans/post-phases-robotics-review.md#c5--declarative-transport-layer-gaps) |
 | Per-topic routing | **Planned (Phase G)** — former C5 Scope C promoted 2026-05-30. New ADR + `RouteRule` surgery + all profiles touched + integration tests rebuilt. See [robotics-ipc-module/plans/G-declarative-routing.md](../robotics-ipc-module/plans/G-declarative-routing.md) |
@@ -275,6 +275,8 @@ When deploying to a new host:
 - [ADR 0005](adr/0005-payload-policy-and-sideband.md) — payload policy + sideband regions
 - [ADR 0009](adr/0009-per-peer-ring-sizing.md) — per-peer SHM ring sizing
 - [ADR 0010](adr/0010-router-timestamp-clock.md) — `CLOCK_MONOTONIC_RAW` timestamp policy
+- [ADR 0011](adr/0011-device-bridge-transports.md) — device-bridge transport selection (UART/MAVLink, SPI, I²C, CAN)
+- [ADR 0012](adr/0012-sideband-memory-class.md) — sideband `memory_class` (`shm` / `cuda_managed` / `cuda_host` / `nvbufsurface`)
 - [robotics-ipc-module/deploy/systemd/README.md](../robotics-ipc-module/deploy/systemd/README.md) — Phase E E2 systemd integration
 - [plans/F-interoperability-bridges.md](../robotics-ipc-module/plans/F-interoperability-bridges.md) — Phase F plan
 - [plans/post-phases-robotics-review.md](../robotics-ipc-module/plans/post-phases-robotics-review.md) — open backlog (C1–C11); C11 specifically addresses the mixed-transport limitation called out in [Known limitations](#known-limitations) above

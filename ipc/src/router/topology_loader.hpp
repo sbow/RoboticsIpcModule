@@ -19,6 +19,11 @@
 //     class             = "vision_nv12"
 //     name              = "/robot_vision_nv12"
 //     max_payload_bytes = 8388608
+//     memory_class      = "nvbufsurface" # ADR 0008/0012, optional, default "shm";
+//                                        # one of: shm, cuda_managed, cuda_host,
+//                                        # nvbufsurface
+//     cuda_device       = 0              # optional, GPU-backed classes only;
+//                                        # rejected on a shm region
 //
 //   [[routes]]
 //   source = 1
@@ -376,6 +381,42 @@ inline void LoadedTopology::build_from_(const toml::table& root) {
                 }
                 // class is informational; we don't enforce a whitelist
                 // (ADR 0005 §2: the kSidebandClass* constants are conventions).
+
+                // memory_class (ADR 0008 forward declaration, realized in
+                // ADR 0012 / F5). Optional; defaults to shm (CPU). Unknown
+                // spellings are a hard error so a typo can't silently fall
+                // back to the CPU path and break a GPU consumer.
+                region.memory_class = SidebandMemoryClass::Shm;
+                if (auto mc = (*sb_tbl)["memory_class"].value<std::string>()) {
+                    if (!parse_sideband_memory_class(mc->c_str(),
+                                                     region.memory_class)) {
+                        throw_load("sideband '" + *sb_name
+                                   + "' has unknown memory_class '" + *mc
+                                   + "' (expected one of: shm, cuda_managed, "
+                                     "cuda_host, nvbufsurface)");
+                    }
+                }
+
+                // cuda_device (optional). Only meaningful for GPU-backed
+                // classes; on a `shm` region it is a configuration error so
+                // operators don't believe a CPU region is pinned to a GPU.
+                region.cuda_device = kSidebandCudaDeviceUnset;
+                if (auto dev = (*sb_tbl)["cuda_device"].value<int64_t>()) {
+                    if (!sideband_memory_class_is_gpu(region.memory_class)) {
+                        throw_load("sideband '" + *sb_name
+                                   + "' sets cuda_device but memory_class is '"
+                                   + sideband_memory_class_name(region.memory_class)
+                                   + "' (cuda_device is only valid for GPU-backed "
+                                     "classes: cuda_managed, cuda_host, nvbufsurface)");
+                    }
+                    if (*dev < 0 || *dev > 255) {
+                        throw_load("sideband '" + *sb_name
+                                   + "' cuda_device " + std::to_string(*dev)
+                                   + " out of range 0..255");
+                    }
+                    region.cuda_device = static_cast<int>(*dev);
+                }
+
                 out.sidebands_.push_back(region);
             }
         }
