@@ -13,7 +13,7 @@
 
 ## Current phase
 
-**Active:** `H` — Mixed-transport router **complete** (single-host SHM + UDS + UDP from one process, ADR 0014; closes C11 single-host half). Phase G (per-topic dispatch, ADR 0013), Phase F (F1–F5), C5 Scopes A + B also complete. Next: C-backlog (C7 RT knobs / C11 cross-host Option 1b / C1+C9 external binaries)
+**Active:** `H` — Mixed-transport router **complete** (single-host SHM + UDS + UDP from one process, ADR 0014; **closes C11** — single-host delivered, cross-host split out to new backlog item **C12**). Phase G (per-topic dispatch, ADR 0013), Phase F (F1–F5), C5 Scopes A + B also complete. Next: C-backlog (C7 RT knobs / C12 cross-host federation, Option 1b + Master-host epoch / C1+C9 external binaries)
 
 ## Phase completion
 
@@ -26,7 +26,7 @@
 | E | Robotics integration | `[x]` | E1 reference layout + E2 systemd units + E3 Phase-F bridge scaffolding + E4 timestamp ADR (CLOCK_MONOTONIC_RAW, cross-host delegated) |
 | F | Interoperability bridges | `[x]` | F1 profiles + F2 Python + F3 Node + F4 MAVLink interface (ADR 0011) + F5 vision `memory_class` (ADR 0012). eventfd idle-wake follow-up (ADR 0007 deferral) remains parked |
 | G | Declarative routing | `[x]` | Per-topic dispatch (former C5 Scope C, promoted 2026-05-30, **delivered 2026-06-01**). [ADR 0013](../docs/adr/0013-per-topic-routing.md): `RouteRule` gains an optional `topic_id` selector; `route_targets_for` dispatches first-match-wins on `(source, topic_id)`; `[[routes]]` gains an optional `topic` field validated against `[[topics]]`. Wire format unchanged; backward compatible. `x86_dev.toml` demos it; new `topic_dispatch_test` + 47 new unit assertions. See [plans/G-declarative-routing.md](plans/G-declarative-routing.md) |
-| H | Mixed-transport router | `[x]` | Single-host mixed transport (former C11 single-host half, **delivered 2026-06-02**). [ADR 0014](../docs/adr/0014-mixed-transport-router.md): non-templated `MixedRouterServer` holds one link per present transport + cooperative non-blocking poll; `forward()` split into `try_receive` + public `send_to_peer`; `Udp`/`Uds::try_recv` (`MSG_DONTWAIT`); multi-listen `[router]` schema (`listen_uds`/`listen_udp`) + per-transport listen validation; `jetson_mixed.toml` (SHM compute + UDS subscribers); new `mixed_transport_test` (SHM→UDS→SHM chain). Templated single-transport path untouched (opt-in). Cross-host (Option 1b) parked. See [plans/H-mixed-transport-router.md](plans/H-mixed-transport-router.md) |
+| H | Mixed-transport router | `[x]` | Single-host mixed transport (former C11 single-host half, **delivered 2026-06-02**). [ADR 0014](../docs/adr/0014-mixed-transport-router.md): non-templated `MixedRouterServer` holds one link per present transport + cooperative non-blocking poll; `forward()` split into `try_receive` + public `send_to_peer`; `Udp`/`Uds::try_recv` (`MSG_DONTWAIT`); multi-listen `[router]` schema (`listen_uds`/`listen_udp`) + per-transport listen validation; `jetson_mixed.toml` (SHM compute + UDS subscribers); new `mixed_transport_test` (SHM→UDS→SHM chain). Templated single-transport path untouched (opt-in). C11 closed; cross-host federation split out to [C12](plans/post-phases-robotics-review.md#c12--cross-host-router-federation) (Option 1b + Master-host epoch). See [plans/H-mixed-transport-router.md](plans/H-mixed-transport-router.md) |
 
 ### Phase A deliverables
 

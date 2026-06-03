@@ -3,9 +3,10 @@
 > **Status:** deferred — revisit when Phase F closes (or earlier if explicitly reopened)
 > **Source:** chat analysis dated 2026-05-26 ([Phase E fit-for-purpose review](f325cb57-00db-4d4e-a19c-2c45473839d1))
 > **Trigger question:** _"Analyze Phase E — is it fit for purpose? Consider TensorRT, CUDA, ARM, x86 playback / simulated inputs, declarative transport."_
-> **Later additions:** C11 (mixed-transport networks) surfaced during Phase F F1 — 2026-05-27.
+> **Later additions:** C11 (mixed-transport networks) surfaced during Phase F F1 — 2026-05-27. **C12 (cross-host router federation)** split out of C11 on closure — 2026-06-02.
 > **Partial closures:** **C5 Scopes A + B** closed early during Phase F (2026-05-28) — 2-destination cap lifted to `kMaxRouteDests = 8`; declarative `[[topics]]` registry added. See the C5 entry for the closure notes.
 > **Re-classifications (2026-05-30):** **C5 Scope C (per-topic routing)** promoted to its own phase plan — see [Phase G — Declarative routing](G-declarative-routing.md). **C5 Scope D (priority-aware QoS)** merged into [C7 — Real-time / production knobs](#c7--real-time--production-knobs-mlockall-cpu-pinning-sched_fifo) because both Scope D and C7 are latency-under-contention problems and share the same systemd-directives surface; see C7 §Options for the merged scope.
+> **Re-classifications (2026-06-02):** **C11 (mixed-transport networks) closed** — single-host mixed transport delivered as [Phase H — Mixed-transport router](H-mixed-transport-router.md) ([ADR 0014](../../docs/adr/0014-mixed-transport-router.md)). The cross-host follow-on (formerly C11 Option 1b) was **split into a new standalone backlog item [C12 — Cross-host router federation](#c12--cross-host-router-federation)** rather than left as a parked sub-clause of a closed item.
 
 ## Scope
 
@@ -49,7 +50,8 @@ At that point, walk each consideration, decide close / defer / scope into a new 
 - **C5** Declarative transport gaps — Scopes A + B closed 2026-05-28; Scope C promoted to [Phase G](G-declarative-routing.md) 2026-05-30; Scope D merged into C7 below
 - **C7** Real-time / production knobs (`mlockall`, CPU pinning, SCHED_FIFO) — now also covers priority-aware QoS (former C5 Scope D)
 - **C10** Module consumption model (`make install` / CMake export vs. vendor-as-submodule)
-- **C11** Mixed-transport networks — fan out a single logical topology across SHM + UDS + UDP peers (today the router is single-transport per instance; surfaced during F1)
+- **C11** Mixed-transport networks — **closed 2026-06-02** (single-host delivered as [Phase H](H-mixed-transport-router.md) / [ADR 0014](../../docs/adr/0014-mixed-transport-router.md); cross-host split to C12)
+- **C12** Cross-host router federation — stitch per-host single-host routers (each already mixed-transport after Phase H) into one logical fabric across machines (split out of C11 on closure)
 
 
 ---
@@ -367,7 +369,7 @@ The Scope A + B delivery was already enough to (i) close the F1 dashboard limita
 
 ### C11 — Mixed-transport networks
 
-> **Status update — 2026-06-02:** Single-host mixed transport (the rubric's recommended **Option 2** first stage) **delivered as [Phase H — Mixed-transport router](H-mixed-transport-router.md)** ([ADR 0014](../../docs/adr/0014-mixed-transport-router.md)). `MixedRouterServer` lifts the single-transport-per-instance constraint within one router process — SHM compute + UDS subscribers (+ UDP) fan out in one hop from one process, selected automatically when a profile mixes transports. Shipped: the `forward()` → `try_receive` + `send_to_peer` split, non-blocking `Udp`/`Uds::try_recv`, the multi-listen `[router]` schema + per-transport listen validation, `config/profiles/jetson_mixed.toml`, and `mixed_transport_test` (SHM→UDS→SHM chain). **The cross-host follow-on (Option 1 / 1b — declarative multi-router + bridge daemons) remains parked** as the explicit stage-two, to be reopened when multi-host / sim_cloud federation becomes necessary (it also drags in the cross-host timestamp-epoch problem — see [C8](#c8--cross-host-time-sync-ptp--ntp) + [ADR 0010](../../docs/adr/0010-router-timestamp-clock.md)). The full analysis below is preserved for the parked cross-host stage.
+> **CLOSED — 2026-06-02.** Single-host mixed transport (the rubric's recommended **Option 2** first stage) **delivered as [Phase H — Mixed-transport router](H-mixed-transport-router.md)** ([ADR 0014](../../docs/adr/0014-mixed-transport-router.md)). `MixedRouterServer` lifts the single-transport-per-instance constraint within one router process — SHM compute + UDS subscribers (+ UDP) fan out in one hop from one process, selected automatically when a profile mixes transports. Shipped: the `forward()` → `try_receive` + `send_to_peer` split, non-blocking `Udp`/`Uds::try_recv`, the multi-listen `[router]` schema + per-transport listen validation, `config/profiles/jetson_mixed.toml`, and `mixed_transport_test` (SHM→UDS→SHM chain). **The cross-host follow-on (formerly Option 1 / 1b — declarative multi-router + bridge daemons) has been split into its own standalone backlog item, [C12 — Cross-host router federation](#c12--cross-host-router-federation),** rather than left dangling as a parked sub-clause here. The Options / variants / decision-rubric analysis below is **retained as the origin record** — C12 carries it forward (and adds the "designate one host as Master" option that sidesteps the PTP/NTP dependency C8 would otherwise force).
 
 **Finding.** The current router architecture is **single-transport per instance**. `RouterServer<T>` is templated on one `Transport`; [`ShmRouterLink::bind_router`](../../ipc/src/router/shm_router_link.hpp) silently skips non-SHM peers in the topology; [`ShmRouterLink::send_to_peer`](../../ipc/src/router/shm_router_link.hpp) **throws** when a route targets a peer it has no channel for. A profile that mixes SHM + UDS peers therefore crashes the forward loop on the first cross-transport route hit. Real deployments want to mix: SHM for the control-loop hot path, UDS for stateful subscribers (recorder, dashboard bridges), UDP for cross-host / HIL — and today they cannot, within one router instance.
 
@@ -444,9 +446,39 @@ When this consideration is reopened, the choice between Options 1 / 2 / 3 turns 
 
 A reasonable two-stage migration: **Option 2 first** (lands single-host mixed-transport, which unblocks F2/F3 properly and matches the operator mental model F1 documented), then **Option 1b stacked on top of Option 2** when cross-host fanout becomes necessary (multi-host robotics, sim_cloud federation, recorder-on-edge-router patterns). Option 3 is the **bridging-by-fiat fallback** if neither lands and the F2 / F3 sketches need to ship anyway — accept the per-peer duplication.
 
-**Decision (2026-06-02).** Single-host mixed transport (Option 2) promoted to [Phase H](H-mixed-transport-router.md); cross-host (Option 1b) parked as the stage-two follow-on, per the two-stage migration the rubric recommends. The C5 co-design concern is resolved: Phase G (per-topic dispatch) shipped transport-agnostic `RouteTargets`, so Phase H resolves a target's transport at send time without touching the routing key — the two compose cleanly rather than colliding.
+**Decision (2026-06-02).** Single-host mixed transport (Option 2) delivered as [Phase H](H-mixed-transport-router.md); **C11 closed.** The cross-host follow-on (Option 1b) is **not** parked under C11 — it has been promoted to its own backlog item, [C12 — Cross-host router federation](#c12--cross-host-router-federation), so a closed item does not carry an open tail. The C5 co-design concern is resolved: Phase G (per-topic dispatch) shipped transport-agnostic `RouteTargets`, so Phase H resolves a target's transport at send time without touching the routing key — the two compose cleanly rather than colliding.
 
 **(Historical) Decision deferred.** This consideration was surfaced in F1 (the all-SHM `jetson_prod.toml` is a workaround, not a fix) and intentionally **not** scoped into a Phase F deliverable — F1's plan-text answer "UDS for logger/dashboard_feed" turned out to require this feature, and adding it under F1 would have ballooned the deliverable. Revisit alongside C5 during the post-phases walk; the two share enough surface area that their resolutions should be co-designed.
+
+---
+
+### C12 — Cross-host router federation
+
+> **Status:** open backlog item — split out of [C11](#c11--mixed-transport-networks) on its closure (2026-06-02). C11 delivered **single-host** mixed transport ([Phase H](H-mixed-transport-router.md)); C12 is the **cross-host** stage-two: stitching the per-host routers (each now mixed-transport capable) into one logical fabric spanning machines.
+
+**Finding.** After [Phase H](H-mixed-transport-router.md), a single `MixedRouterServer` fans out across SHM + UDS + UDP **within one host/process** in one hop. It does **not** federate across hosts: a frame originating on host A and destined for a peer on host B still requires either (a) the destination peer to speak the router's UDP link directly as a remote peer, or (b) an explicit inter-router bridge. There is no declarative notion of "router-A and router-B are two faces of one logical topology," no route that can name a *router-id* as a target, and no shared identity/clock story across the boundary. Real multi-host robotics — Jetson edge + sim_cloud container + dashboard host, or a multi-robot fleet sharing a coordinator — needs this.
+
+**Inherited from C11.** The cross-host options analysis lives in [C11 §Options](#c11--mixed-transport-networks) and is carried forward unchanged here:
+
+- **Option 1 — factory-generated bridge daemons** between per-host single-transport (now mixed-transport) routers.
+- **Option 1a — SHM-backed inter-router channel** (intra-host optimization of Option 1; not applicable cross-host but relevant if a host runs more than one router).
+- **Option 1b — declarative multi-router schema** (`[[routers]]` table; routes can target a peer **or** a router-id; a build tool emits per-router profiles + bridge config from one logical topology). This is the rubric's recommended cross-host path and the natural successor to Phase H.
+
+The Phase H foundation makes Option 1b cheaper than it was when first written: each host already runs **one** mixed-transport router, so federation is router-to-router (one bridge edge per host pair) rather than transport-to-transport (O(transport_pairs) per host). The bridge edge is just a UDP (or UDS, same-host) link that both routers already know how to speak.
+
+**The cross-host time / identity problem.** Cross-host federation drags in the timestamp-epoch issue tracked under [C8 — Cross-host time sync](#c8--cross-host-time-sync-ptp--ntp) + [ADR 0010](../../docs/adr/0010-router-timestamp-clock.md): each router stamps `timestamp_ns` from its own `steady_clock`, so frames crossing a host boundary carry epochs that are not comparable. The textbook answer is **PTP (IEEE 1588) or chrony/NTP** to discipline all hosts to a shared wall clock — but that pulls a real operational dependency (a `ptp4l`/`phc2sys` daemon per host, NIC hardware-timestamp support for sub-µs PTP, or a chrony fleet) into what is today a dependency-light header-only module.
+
+**Note — "Master host" as the cheap alternative to PTP/NTP.** Before reaching for PTP/chrony, consider simply **designating one host as the Master** (the clock + routing authority) and having every other host's router treat the Master's epoch as canonical:
+
+- The Master's router is the single source of `timestamp_ns` truth. Subordinate routers do **not** re-stamp federated frames; they either pass the Master's `timestamp_ns` through untouched, or, on the ingress edge, record a one-time `offset = master_now − local_now` handshake and apply it so local-origin frames are expressed in the Master's epoch.
+- This makes timestamps comparable fleet-wide **without** PTP hardware, without a `ptp4l`/`phc2sys` daemon, and without a chrony quorum — at the cost of a single point of authority (acceptable for the common edge-compute topology where the Jetson *is* the natural master and the other hosts are sim/dashboard adjuncts) and coarser absolute accuracy than hardware PTP (offset drift between handshakes, bounded by `steady_clock` skew over the federation lifetime — fine for ordering/latency-budget use, not for hard sub-µs sync).
+- It also dovetails with Option 1b: the "Master" is naturally the router that owns the canonical logical topology, so the same host that authors/serves the federated route table also serves the epoch. Promote PTP/NTP only if/when a use case needs true sub-µs cross-host accuracy that a Master handshake can't provide.
+
+**Coverage today.** No — federation is entirely future work; nothing in Phase H crosses a host boundary except a single UDP peer link, which is point-to-point, not federated.
+
+**Why it matters.** Multi-host is the next scaling axis once single-host is saturated: fleet coordination, offloading inference to a sim_cloud/GPU host, dashboard/recorder on a separate ops box, hardware-in-the-loop benches. Each wants frames to flow across the host boundary under the *same* logical topology and (ideally) a comparable clock, without every peer reimplementing a bridge.
+
+**Decision.** Deferred — reopen when a concrete multi-host / fleet / sim_cloud requirement lands. Recommended path when reopened: **Option 1b on top of Phase H**, with the **Master-host epoch handshake as the default time story** and PTP/NTP as an opt-in upgrade for deployments that genuinely need hardware-grade sync.
 
 ---
 
@@ -464,7 +496,8 @@ A reasonable two-stage migration: **Option 2 first** (lands single-host mixed-tr
 | C8 | Cross-host time sync | `steady_clock` relative ns | E4 (forward-decl only) | 2 |
 | C9 | Camera / GStreamer shape | Docs only | Phase F (F5) | 1 |
 | C10 | Module consumption model | Implicit submodule pattern | Not planned | 3 |
-| C11 | Mixed-transport networks | Single-transport per router (hard) | Single-host **delivered → [Phase H](H-mixed-transport-router.md) / [ADR 0014](../../docs/adr/0014-mixed-transport-router.md)** (2026-06-02); cross-host (Option 1b) parked | `MixedRouterServer`, `mixed_transport_test`, `jetson_mixed.toml` |
+| C11 | Mixed-transport networks | Single-transport per router (hard) | **Closed 2026-06-02** — single-host **delivered → [Phase H](H-mixed-transport-router.md) / [ADR 0014](../../docs/adr/0014-mixed-transport-router.md)**; cross-host split to C12 | `MixedRouterServer`, `mixed_transport_test`, `jetson_mixed.toml` |
+| C12 | Cross-host router federation | None (single-host only after Phase H) | Open backlog — Option 1b on Phase H + Master-host epoch (PTP optional) | — |
 
 ## References
 
