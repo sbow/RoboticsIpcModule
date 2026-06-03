@@ -367,6 +367,8 @@ The Scope A + B delivery was already enough to (i) close the F1 dashboard limita
 
 ### C11 — Mixed-transport networks
 
+> **Status update — 2026-06-02:** Single-host mixed transport (the rubric's recommended **Option 2** first stage) **promoted to [Phase H — Mixed-transport router](H-mixed-transport-router.md)** (planned ADR 0014). Phase H lifts the single-transport-per-instance constraint within one router process (SHM compute + UDS subscribers + UDP cross-host ingress, one hop, one process). **The cross-host follow-on (Option 1 / 1b — declarative multi-router + bridge daemons) remains parked** as the explicit stage-two, to be reopened when multi-host / sim_cloud federation becomes necessary (it also drags in the cross-host timestamp-epoch problem — see [C8](#c8--cross-host-time-sync-ptp--ntp) + [ADR 0010](../../docs/adr/0010-router-timestamp-clock.md)). The full analysis below is preserved for the Phase H execution and for the parked cross-host stage.
+
 **Finding.** The current router architecture is **single-transport per instance**. `RouterServer<T>` is templated on one `Transport`; [`ShmRouterLink::bind_router`](../../ipc/src/router/shm_router_link.hpp) silently skips non-SHM peers in the topology; [`ShmRouterLink::send_to_peer`](../../ipc/src/router/shm_router_link.hpp) **throws** when a route targets a peer it has no channel for. A profile that mixes SHM + UDS peers therefore crashes the forward loop on the first cross-transport route hit. Real deployments want to mix: SHM for the control-loop hot path, UDS for stateful subscribers (recorder, dashboard bridges), UDP for cross-host / HIL — and today they cannot, within one router instance.
 
 **Evidence.**
@@ -442,7 +444,9 @@ When this consideration is reopened, the choice between Options 1 / 2 / 3 turns 
 
 A reasonable two-stage migration: **Option 2 first** (lands single-host mixed-transport, which unblocks F2/F3 properly and matches the operator mental model F1 documented), then **Option 1b stacked on top of Option 2** when cross-host fanout becomes necessary (multi-host robotics, sim_cloud federation, recorder-on-edge-router patterns). Option 3 is the **bridging-by-fiat fallback** if neither lands and the F2 / F3 sketches need to ship anyway — accept the per-peer duplication.
 
-**Decision deferred.** This consideration was surfaced in F1 (the all-SHM `jetson_prod.toml` is a workaround, not a fix) and intentionally **not** scoped into a Phase F deliverable — F1's plan-text answer "UDS for logger/dashboard_feed" turned out to require this feature, and adding it under F1 would have ballooned the deliverable. Revisit alongside C5 during the post-phases walk; the two share enough surface area that their resolutions should be co-designed.
+**Decision (2026-06-02).** Single-host mixed transport (Option 2) promoted to [Phase H](H-mixed-transport-router.md); cross-host (Option 1b) parked as the stage-two follow-on, per the two-stage migration the rubric recommends. The C5 co-design concern is resolved: Phase G (per-topic dispatch) shipped transport-agnostic `RouteTargets`, so Phase H resolves a target's transport at send time without touching the routing key — the two compose cleanly rather than colliding.
+
+**(Historical) Decision deferred.** This consideration was surfaced in F1 (the all-SHM `jetson_prod.toml` is a workaround, not a fix) and intentionally **not** scoped into a Phase F deliverable — F1's plan-text answer "UDS for logger/dashboard_feed" turned out to require this feature, and adding it under F1 would have ballooned the deliverable. Revisit alongside C5 during the post-phases walk; the two share enough surface area that their resolutions should be co-designed.
 
 ---
 
@@ -460,7 +464,7 @@ A reasonable two-stage migration: **Option 2 first** (lands single-host mixed-tr
 | C8 | Cross-host time sync | `steady_clock` relative ns | E4 (forward-decl only) | 2 |
 | C9 | Camera / GStreamer shape | Docs only | Phase F (F5) | 1 |
 | C10 | Module consumption model | Implicit submodule pattern | Not planned | 3 |
-| C11 | Mixed-transport networks | Single-transport per router (hard) | Not planned; surfaced in F1 | 3 |
+| C11 | Mixed-transport networks | Single-transport per router (hard) | Single-host → [Phase H](H-mixed-transport-router.md) (promoted 2026-06-02); cross-host (Option 1b) parked | — |
 
 ## References
 
