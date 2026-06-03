@@ -6,6 +6,7 @@
 #include "router/topology_loader.hpp"
 #include "router/sideband.hpp"
 #include "router/topic_table.hpp"
+#include "router/mixed_router_server.hpp"
 #include "ipc/shm_spsc.hpp"
 #include "router/frame.hpp"
 
@@ -774,6 +775,106 @@ void test_route_without_topic_defaults_to_match_any() {
     EXPECT(rules[0].topic_id == kRouteTopicAny);
 }
 
+// Phase H — multi-listen schema for the mixed-transport router (ADR 0014).
+constexpr const char* kMixedShmUds = R"(
+[router]
+listen     = "shm:/rim_router"
+listen_uds = "uds:/tmp/rim_router.sock"
+
+[[peers]]
+id    = 1
+name  = "compute"
+local = "shm:/rim_compute"
+
+[[peers]]
+id    = 2
+name  = "recorder"
+local = "uds:/tmp/rim_recorder.sock"
+
+[[routes]]
+source = 1
+dest   = [2]
+)";
+
+void test_mixed_listen_shm_uds_parses() {
+    LoadedTopology loaded = load_topology_from_toml_string(kMixedShmUds);
+    RouterTopology topo = loaded.view();
+    // Primary listen stays the SHM address (back-compat).
+    EXPECT(topo.router_listen.kind == PeerAddressKind::ShmRing);
+    // The extra UDS listen is resolved and flagged.
+    EXPECT(topo.has_listen_uds);
+    EXPECT(topo.listen_uds.kind == PeerAddressKind::UdsPath);
+    EXPECT_STREQ(topo.listen_uds.u.uds_path, "/tmp/rim_router.sock");
+    EXPECT(!topo.has_listen_udp);
+    // It is a mixed topology (peers span SHM + UDS).
+    EXPECT(topology_is_mixed(topo));
+}
+
+constexpr const char* kMixedUdsUdp = R"(
+[router]
+listen     = "uds:/tmp/rim_router.sock"
+listen_udp = "udp:0.0.0.0:19100"
+
+[[peers]]
+id    = 1
+name  = "local_node"
+local = "uds:/tmp/rim_local.sock"
+
+[[peers]]
+id    = 2
+name  = "remote_node"
+local = "udp:127.0.0.1:19201"
+
+[[routes]]
+source = 1
+dest   = [2]
+)";
+
+void test_mixed_listen_uds_udp_parses() {
+    LoadedTopology loaded = load_topology_from_toml_string(kMixedUdsUdp);
+    RouterTopology topo = loaded.view();
+    // The primary `listen` (uds) doubles as the uds listen.
+    EXPECT(topo.has_listen_uds);
+    EXPECT(topo.listen_uds.kind == PeerAddressKind::UdsPath);
+    // The explicit listen_udp is resolved.
+    EXPECT(topo.has_listen_udp);
+    EXPECT(topo.listen_udp.kind == PeerAddressKind::UdpEndpoint);
+    EXPECT_EQ(static_cast<int>(topo.listen_udp.u.udp.port), 19100);
+    EXPECT(topology_is_mixed(topo));
+}
+
+void test_single_transport_is_not_mixed() {
+    // A homogeneous UDS profile must not be flagged mixed and must keep the
+    // single-transport listen flags it always had.
+    LoadedTopology loaded = load_topology_from_toml_string(kValidUds);
+    RouterTopology topo = loaded.view();
+    EXPECT(!topology_is_mixed(topo));
+    EXPECT(topo.has_listen_uds);   // listen is uds, so uds is served
+    EXPECT(!topo.has_listen_udp);
+}
+
+void test_jetson_mixed_profile_loads() {
+    // The Phase H deployment template: SHM compute peers + UDS subscribers in
+    // one router. Guards the profile against schema drift and proves the
+    // mixed selector + multi-listen validation accept it.
+    LoadedTopology loaded = load_topology_from_toml_file(
+        "config/profiles/jetson_mixed.toml");
+    RouterTopology topo = loaded.view();
+    EXPECT_EQ(topo.peer_count, static_cast<std::size_t>(7));
+    EXPECT(topology_is_mixed(topo));
+    EXPECT(topo.router_listen.kind == PeerAddressKind::ShmRing);
+    EXPECT(topo.has_listen_uds);
+    EXPECT(!topo.has_listen_udp);
+    // Compute peers stay SHM; IO peers are UDS.
+    EXPECT(peer_by_id(topo, 1)->local.kind == PeerAddressKind::ShmRing);
+    EXPECT(peer_by_id(topo, 2)->local.kind == PeerAddressKind::ShmRing);
+    EXPECT(peer_by_id(topo, 3)->local.kind == PeerAddressKind::UdsPath);
+    EXPECT(peer_by_id(topo, 7)->local.kind == PeerAddressKind::UdsPath);
+    EXPECT(peer_by_id(topo, 8)->local.kind == PeerAddressKind::UdsPath);
+    // Same 5 transport-agnostic routes as jetson_prod.toml.
+    EXPECT_EQ(loaded.route_count(), static_cast<std::size_t>(5));
+}
+
 void test_errors() {
     expect_load_error("", "missing [router] section");
 
@@ -1017,6 +1118,55 @@ dest = [2]
 id   = 100
 name = "t"
 )", "out of range 0..65534");
+
+    // Phase H — a datagram peer with no matching router listen is rejected.
+    // uds peer, shm-only listen, no listen_uds.
+    expect_load_error(R"(
+[router]
+listen = "shm:/rim_router"
+[[peers]]
+id = 1
+name = "compute"
+local = "shm:/rim_compute"
+[[peers]]
+id = 2
+name = "recorder"
+local = "uds:/tmp/rim_recorder.sock"
+[[routes]]
+source = 1
+dest = [2]
+)", "no uds listen");
+
+    // udp peer, shm-only listen, no listen_udp.
+    expect_load_error(R"(
+[router]
+listen = "shm:/rim_router"
+[[peers]]
+id = 1
+name = "compute"
+local = "shm:/rim_compute"
+[[peers]]
+id = 2
+name = "remote"
+local = "udp:127.0.0.1:19201"
+[[routes]]
+source = 1
+dest = [2]
+)", "no udp listen");
+
+    // listen_uds must itself be a uds: address.
+    expect_load_error(R"(
+[router]
+listen     = "shm:/rim_router"
+listen_uds = "udp:0.0.0.0:19100"
+[[peers]]
+id = 1
+name = "compute"
+local = "shm:/rim_compute"
+[[routes]]
+source = 1
+dest = [1]
+)", "listen_uds must be a uds: address");
 }
 
 }  // namespace
@@ -1048,6 +1198,12 @@ int main() {
     // Phase G (ADR 0013) — per-topic routing.
     test_per_topic_route_parses();
     test_route_without_topic_defaults_to_match_any();
+
+    // Phase H (ADR 0014) — mixed-transport multi-listen schema.
+    test_mixed_listen_shm_uds_parses();
+    test_mixed_listen_uds_udp_parses();
+    test_single_transport_is_not_mixed();
+    test_jetson_mixed_profile_loads();
 
     std::cout << "topology_loader_test: " << (g_total - g_failed) << '/'
               << g_total << " assertions passed\n";

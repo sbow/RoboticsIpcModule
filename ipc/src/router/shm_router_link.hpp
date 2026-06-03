@@ -75,6 +75,29 @@ public:
             throw std::runtime_error("forward on client link");
         }
 
+        const uint8_t source = try_receive(frame, timestamp_ns);
+        if (source == kEndpointInvalid) {
+            metrics_->recv_empty.fetch_add(1, std::memory_order_relaxed);
+            return {};
+        }
+
+        ForwardResult result;
+        result.source = source;
+        result.targets = route_targets_for(rules, rule_count, source,
+                                            frame.topic_id());
+        for (uint8_t dest : result.targets) {
+            send_to_peer(dest, frame.read_only());
+        }
+        return result;
+    }
+
+    // Phase H — receive-and-resolve half of forward() with no egress, for the
+    // mixed-transport router's cooperative poll (see link.hpp). Scans the
+    // per-peer SPSC rings, returns the first ready frame's source peer id (or
+    // kEndpointInvalid when every ring is empty) and stamps source + timestamp
+    // into `frame`. Does NOT bump recv_empty — the mixed loop decides idleness
+    // across all transports, so single-transport forward() owns that counter.
+    uint8_t try_receive(RouterFrame& frame, uint64_t timestamp_ns) {
         for (const auto& channel : peer_channels_) {
             Buffer buf = frame.writable();
             ShmSpsc::RecvResult recv{};
@@ -85,22 +108,33 @@ public:
                 metrics_->recv_truncated.fetch_add(1, std::memory_order_relaxed);
                 continue;
             }
-
             const uint8_t source = channel.peer_id;
             frame.set_source(source);
             frame.set_timestamp_ns(timestamp_ns);
-
-            ForwardResult result;
-            result.source = source;
-            result.targets = route_targets_for(rules, rule_count, source,
-                                                frame.topic_id());
-            for (uint8_t dest : result.targets) {
-                send_to_peer(dest, buf);
-            }
-            return result;
+            return source;
         }
-        metrics_->recv_empty.fetch_add(1, std::memory_order_relaxed);
-        return {};
+        return kEndpointInvalid;
+    }
+
+    // Phase H — egress half of forward(), made public so the mixed router can
+    // deliver frames that arrived on a different transport into a SHM ring.
+    // Drop-on-full per ADR 0006 (see the per-peer counters below).
+    void send_to_peer(uint8_t dest, const Buffer& payload) {
+        for (auto& channel : peer_channels_) {
+            if (channel.peer_id == dest) {
+                if (try_send_shm_buffer(channel.endpoint, payload)
+                    == ShmSendResult::Ok) {
+                    metrics_->forwarded.fetch_add(1, std::memory_order_relaxed);
+                } else {
+                    metrics_->dropped_full.fetch_add(1, std::memory_order_relaxed);
+                    metrics_->dropped_full_per_peer[dest].fetch_add(
+                        1, std::memory_order_relaxed);
+                }
+                return;
+            }
+        }
+        throw std::runtime_error("shm router: no channel for peer id "
+            + std::to_string(dest));
     }
 
     // Phase C3: live counters. Returned reference is stable for the lifetime
@@ -158,32 +192,9 @@ private:
         bind_shm_endpoint(endpoint_, *entry, false);  // ADR 0009 per-peer sizing
     }
 
-    // Phase C1: drop-on-full (ADR 0006). The router never spins on a slow
-    // consumer; a missed frame is preferable to head-of-line blocking the
-    // entire fabric.
-    //
-    // Phase D2a: on Full, bump both the aggregate `dropped_full` counter
-    // (kept for backwards compatibility with Phase C consumers) and the
-    // `dropped_full_per_peer[dest]` slot. The latter is what lets operators
-    // and the slow-recorder integration test answer "which subscriber is
-    // the slow one?" without re-deriving from logs.
-    void send_to_peer(uint8_t dest, const Buffer& payload) {
-        for (auto& channel : peer_channels_) {
-            if (channel.peer_id == dest) {
-                if (try_send_shm_buffer(channel.endpoint, payload)
-                    == ShmSendResult::Ok) {
-                    metrics_->forwarded.fetch_add(1, std::memory_order_relaxed);
-                } else {
-                    metrics_->dropped_full.fetch_add(1, std::memory_order_relaxed);
-                    metrics_->dropped_full_per_peer[dest].fetch_add(
-                        1, std::memory_order_relaxed);
-                }
-                return;
-            }
-        }
-        throw std::runtime_error("shm router: no channel for peer id "
-            + std::to_string(dest));
-    }
+    // Phase C1 drop-on-full (ADR 0006) and Phase D2a per-peer drop counters
+    // now live in the public send_to_peer above (Phase H made it public so the
+    // mixed-transport router can drive SHM egress).
 
     const RouterTopology& topo_;
     bool is_server_;

@@ -23,6 +23,15 @@ public:
         T::recv(handle_, buf, out);
     }
 
+    // Non-blocking receive: forwards to T::try_recv when the transport exposes
+    // one (datagram sockets via MSG_DONTWAIT). Returns false when no message is
+    // available. Used by the Phase H mixed-transport router's cooperative poll.
+    bool try_recv(Buffer& buf, typename T::RecvResult& out)
+        requires requires(typename T::Handle& h) { T::try_recv(h, buf, out); }
+    {
+        return T::try_recv(handle_, buf, out);
+    }
+
     void send(const typename T::SendParams& params, const Buffer& payload) {
         T::send(handle_, params, payload);
     }

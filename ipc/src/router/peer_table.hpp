@@ -79,6 +79,17 @@ struct RouterTopology {
     // does not consult this catalog today; bridges and tooling do.
     const TopicEntry* topics = nullptr;
     size_t topic_count = 0;
+
+    // Phase H — additional per-datagram-transport router listen endpoints, used
+    // only by the mixed-transport router (mixed_router_server.hpp). A mixed
+    // profile binds one SHM ring set (derived from peers, needs no listen),
+    // plus a UDS and/or UDP listen socket for its datagram peers. has_* == false
+    // means this router does not serve that datagram transport; single-transport
+    // and homogeneous profiles leave them unset and keep using router_listen.
+    bool has_listen_uds = false;
+    PeerAddress listen_uds{};
+    bool has_listen_udp = false;
+    PeerAddress listen_udp{};
 };
 
 template<typename Predicate>

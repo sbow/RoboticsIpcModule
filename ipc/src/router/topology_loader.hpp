@@ -5,7 +5,13 @@
 // Schema (see config/profiles/*.toml for full examples):
 //
 //   [router]
-//   listen = "uds:/tmp/router.sock"     # or "udp:127.0.0.1:19100", "shm:/router_a"
+//   listen     = "uds:/tmp/router.sock" # or "udp:127.0.0.1:19100", "shm:/router_a"
+//   listen_uds = "uds:/tmp/router.sock" # Phase H, optional: extra datagram
+//   listen_udp = "udp:0.0.0.0:19100"    # listen(s) for a MIXED-transport router
+//                                        # (router serves SHM + UDS + UDP peers
+//                                        # from one process, ADR 0014). SHM peers
+//                                        # need no listen; each datagram peer
+//                                        # requires a matching listen here.
 //
 //   [[peers]]
 //   id              = 1
@@ -127,6 +133,10 @@ public:
         v.router_listen  = router_listen_;
         v.topics         = topics_.data();
         v.topic_count    = topics_.size();
+        v.has_listen_uds = has_listen_uds_;
+        v.listen_uds     = listen_uds_;
+        v.has_listen_udp = has_listen_udp_;
+        v.listen_udp     = listen_udp_;
         return v;
     }
 
@@ -178,6 +188,14 @@ private:
     std::vector<SidebandRegion> sidebands_;
     std::vector<std::pair<size_t, size_t>> peer_sideband_ranges_;  // by peer index
     PeerAddress router_listen_{};
+
+    // Phase H — per-datagram-transport router listen endpoints for mixed
+    // profiles. Resolved from [router].listen (when it is a datagram address)
+    // and/or the optional [router].listen_uds / listen_udp keys.
+    bool has_listen_uds_ = false;
+    PeerAddress listen_uds_{};
+    bool has_listen_udp_ = false;
+    PeerAddress listen_udp_{};
 };
 
 inline PeerAddress LoadedTopology::parse_address_(std::string_view spec) {
@@ -252,6 +270,36 @@ inline void LoadedTopology::build_from_(const toml::table& root) {
         throw_load("missing router.listen string");
     }
     out.router_listen_ = out.parse_address_(*listen_str);
+
+    // Phase H — multi-listen for the mixed-transport router. The primary
+    // `listen` stays required and back-compatible: when it is a datagram
+    // address it is also the listen for that datagram transport. A mixed
+    // profile adds optional `listen_uds` / `listen_udp` keys for the other
+    // datagram transport(s) it serves. SHM peers need no listen (per-peer
+    // rings are derived from the topology).
+    if (out.router_listen_.kind == PeerAddressKind::UdsPath) {
+        out.has_listen_uds_ = true;
+        out.listen_uds_     = out.router_listen_;
+    } else if (out.router_listen_.kind == PeerAddressKind::UdpEndpoint) {
+        out.has_listen_udp_ = true;
+        out.listen_udp_     = out.router_listen_;
+    }
+    if (auto uds_str = (*router_section)["listen_uds"].value<std::string>()) {
+        PeerAddress addr = out.parse_address_(*uds_str);
+        if (addr.kind != PeerAddressKind::UdsPath) {
+            throw_load("router.listen_uds must be a uds: address");
+        }
+        out.has_listen_uds_ = true;
+        out.listen_uds_     = addr;
+    }
+    if (auto udp_str = (*router_section)["listen_udp"].value<std::string>()) {
+        PeerAddress addr = out.parse_address_(*udp_str);
+        if (addr.kind != PeerAddressKind::UdpEndpoint) {
+            throw_load("router.listen_udp must be a udp: address");
+        }
+        out.has_listen_udp_ = true;
+        out.listen_udp_     = addr;
+    }
 
     // [[peers]]
     auto* peers_array = root["peers"].as_array();
@@ -427,6 +475,25 @@ inline void LoadedTopology::build_from_(const toml::table& root) {
         }
         const size_t sideband_end = out.sidebands_.size();
         out.peer_sideband_ranges_.emplace_back(sideband_begin, sideband_end);
+    }
+
+    // Phase H — a datagram peer can only be served if the router actually
+    // listens on that transport. SHM peers need no listen (per-peer rings).
+    // This catches the most common mixed-profile mistake: declaring a uds/udp
+    // peer but forgetting the matching [router] listen, which would otherwise
+    // only surface as silent unknown-source drops at runtime.
+    for (const auto& peer : out.peers_) {
+        if (peer.local.kind == PeerAddressKind::UdsPath && !out.has_listen_uds_) {
+            throw_load("peer '" + std::string(peer.name)
+                       + "' is a uds peer but [router] has no uds listen "
+                         "(set listen or listen_uds to a uds: address)");
+        }
+        if (peer.local.kind == PeerAddressKind::UdpEndpoint
+            && !out.has_listen_udp_) {
+            throw_load("peer '" + std::string(peer.name)
+                       + "' is a udp peer but [router] has no udp listen "
+                         "(set listen or listen_udp to a udp: address)");
+        }
     }
 
     // [[routes]]

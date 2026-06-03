@@ -3,6 +3,7 @@
 #include "buffer.hpp"
 
 #include <arpa/inet.h>
+#include <cerrno>
 #include <cstdint>
 #include <cstring>
 #include <netinet/in.h>
@@ -155,6 +156,26 @@ struct Udp {
         buf.size = static_cast<size_t>(n);
     }
 
+    // Phase H — non-blocking receive for the mixed-transport router's
+    // cooperative poll loop. Returns false (no throw) when the socket has no
+    // pending datagram (EAGAIN/EWOULDBLOCK); throws on a genuine error. Uses
+    // MSG_DONTWAIT so it never depends on the socket's SO_RCVTIMEO/O_NONBLOCK
+    // state, leaving the blocking recv() path (single-transport routers)
+    // untouched.
+    static bool try_recv(const Handle& handle, Buffer& buf, RecvResult& out) {
+        socklen_t from_len = sizeof(out.from);
+        const ssize_t n = ::recvfrom(handle.fd(), buf.data, buf.capacity,
+            MSG_DONTWAIT, reinterpret_cast<sockaddr*>(&out.from), &from_len);
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                return false;
+            }
+            throw std::runtime_error("udp recvfrom failed");
+        }
+        buf.size = static_cast<size_t>(n);
+        return true;
+    }
+
     static void connect_or_send(const Handle& handle, const SendParams& params) {
         send(handle, params, params.payload);
     }
@@ -249,6 +270,21 @@ struct Uds {
             throw std::runtime_error("uds recvfrom failed");
         }
         buf.size = static_cast<size_t>(n);
+    }
+
+    // Phase H — non-blocking receive (see Udp::try_recv).
+    static bool try_recv(const Handle& handle, Buffer& buf, RecvResult& out) {
+        socklen_t from_len = sizeof(out.from);
+        const ssize_t n = ::recvfrom(handle.fd(), buf.data, buf.capacity,
+            MSG_DONTWAIT, reinterpret_cast<sockaddr*>(&out.from), &from_len);
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                return false;
+            }
+            throw std::runtime_error("uds recvfrom failed");
+        }
+        buf.size = static_cast<size_t>(n);
+        return true;
     }
 
     static void connect_or_send(const Handle& handle, const SendParams& params) {

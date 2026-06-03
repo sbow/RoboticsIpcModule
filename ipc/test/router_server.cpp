@@ -1,6 +1,7 @@
 #include "router_app.h"
 #include "router_client_config.h"
 #include "router/factory.hpp"
+#include "router/mixed_router_server.hpp"
 #include "router/timestamp.hpp"
 #include "router/topology_loader.hpp"
 #include "router_protocol.hpp"
@@ -82,8 +83,29 @@ void run_shm_router(const RouterTopology& topo,
     run_forward_loop(server, topo, rules, rule_count);
 }
 
+// Phase H — mixed-transport router (ADR 0014). Selected when a profile's peers
+// span more than one transport kind. Binds one link per present transport and
+// drives them from a single cooperative non-blocking poll loop.
+void run_mixed_router(const RouterTopology& topo,
+                      const RouteRule* rules,
+                      std::size_t rule_count) {
+    auto server = make_mixed_router_server(topo);
+    if (topo.has_listen_uds) {
+        ::unlink(topo.listen_uds.u.uds_path);
+    }
+    server.bind_router();
+    std::string kinds;
+    if (server.has_shm()) kinds += "SHM ";
+    if (server.has_uds()) kinds += "UDS ";
+    if (server.has_udp()) kinds += "UDP ";
+    router_log(ROUTER_LOG_INFO,
+               std::string("mixed-transport router serving: ") + kinds);
+    run_forward_loop(server, topo, rules, rule_count);
+}
+
 // --config <path>: load TOML topology, route table comes from the file.
-// Transport kind is derived from router_listen's address kind.
+// Transport kind is derived from router_listen's address kind, unless the
+// profile mixes transports — then the mixed-transport router is used.
 int run_with_config(const std::string& path) {
     LoadedTopology loaded = load_topology_from_toml_file(path);
     const RouterTopology topo = loaded.view();
@@ -94,6 +116,11 @@ int run_with_config(const std::string& path) {
         router_log(ROUTER_LOG_WARN,
                    std::string("config '") + path
                    + "' has no [[routes]]; router will receive but not forward");
+    }
+
+    if (topology_is_mixed(topo)) {
+        run_mixed_router(topo, rules, rule_count);
+        return 0;
     }
 
     switch (topo.router_listen.kind) {

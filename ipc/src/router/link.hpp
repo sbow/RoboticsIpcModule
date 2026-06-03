@@ -100,9 +100,48 @@ public:
                                             frame.topic_id());
         for (uint8_t dest : result.targets) {
             send_to_peer(dest, buf);
-            metrics_->forwarded.fetch_add(1, std::memory_order_relaxed);
         }
         return result;
+    }
+
+    // Phase H — receive-and-resolve half of forward(), with no egress. The
+    // mixed-transport router (mixed_router_server.hpp) needs to poll many
+    // links from one thread and dispatch egress across transports, so it
+    // separates "pull the next frame and tell me who sent it" from "send".
+    // Non-blocking (MSG_DONTWAIT) so one idle transport never starves another.
+    // Returns the resolved source peer id, or kEndpointInvalid when no frame
+    // was available, the frame was truncated, or the source was unknown.
+    // Stamps source + timestamp into `frame` on success.
+    uint8_t try_receive(RouterFrame& frame, uint64_t timestamp_ns) {
+        typename Transport::RecvResult recv{};
+        Buffer buf = frame.writable();
+        if (!endpoint_.try_recv(buf, recv)) {
+            return kEndpointInvalid;
+        }
+        if (buf.size < kRouterFrameSize) {
+            metrics_->recv_truncated.fetch_add(1, std::memory_order_relaxed);
+            return kEndpointInvalid;
+        }
+        const uint8_t source = peer_id_from_recv<Transport>(topo_, recv);
+        if (source == kEndpointInvalid) {
+            metrics_->recv_unknown_source.fetch_add(1, std::memory_order_relaxed);
+            return kEndpointInvalid;
+        }
+        frame.set_source(source);
+        frame.set_timestamp_ns(timestamp_ns);
+        return source;
+    }
+
+    // Phase H — egress half of forward(), made public so the mixed router can
+    // drive cross-transport delivery. Bumps `forwarded` on a successful send
+    // (a dest that is not a peer is a no-op, matching route-validated input).
+    void send_to_peer(uint8_t dest, const Buffer& payload) {
+        const PeerEntry* entry = peer_by_id(topo_, dest);
+        if (!entry) {
+            return;
+        }
+        send_buffer_to(entry->local, payload);
+        metrics_->forwarded.fetch_add(1, std::memory_order_relaxed);
     }
 
     // Phase D4 — read-only metrics handle. Lives for the link's lifetime
@@ -161,14 +200,6 @@ private:
             throw std::runtime_error("unknown peer id");
         }
         bind_datagram_endpoint(endpoint_, entry->local);
-    }
-
-    void send_to_peer(uint8_t dest, const Buffer& payload) {
-        const PeerEntry* entry = peer_by_id(topo_, dest);
-        if (!entry) {
-            return;
-        }
-        send_buffer_to(entry->local, payload);
     }
 
     void send_buffer_to(const PeerAddress& addr, const Buffer& payload) {

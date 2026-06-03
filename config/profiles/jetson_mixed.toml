@@ -1,0 +1,132 @@
+# Jetson MIXED-transport profile — the originally-intended Jetson shape.
+#
+# Phase H deployment template (ADR 0014). This is jetson_prod.toml's sibling:
+# the compute hot path stays on per-peer SHM SPSC rings, while the IO-side
+# subscribers/bridges move to UDS — the transport they actually want in
+# production (recorder writes log files; dashboard_feed bridges to a Node.js
+# WebSocket gateway over a UNIX socket; python_tooling is the UDS ctypes
+# bridge). A single MixedRouterServer process fans frames out across SHM + UDS
+# in ONE in-process hop, lifting the single-transport constraint that forced
+# jetson_prod.toml to ride every peer on SHM.
+#
+# How transport is chosen (see mixed_router_server.hpp):
+#   * The router detects that peers span >1 transport kind and selects the
+#     MixedRouterServer instead of a templated single-transport RouterServer.
+#   * SHM peers need no [router] listen — per-peer rings are derived from the
+#     topology. Each datagram transport in use needs a matching listen here:
+#     `listen` (shm:, the primary) + `listen_uds` for the UDS subscribers.
+#   * Routes are transport-agnostic (RouteTargets are just peer ids), so the
+#     route table below is byte-for-byte the same as jetson_prod.toml.
+#
+# jetson_prod.toml is preserved unchanged as the conservative all-SHM variant
+# (e.g. when a SHM-only consumer fleet is deployed, or to avoid the bounded
+# idle-pickup latency the mixed router's non-blocking datagram poll adds on
+# UDS ingress — see ADR 0007 / ADR 0014). Pick jetson_mixed.toml when the IO
+# peers are genuinely UDS clients.
+#
+# Usage:
+#   ./build/ipc/test/router_server --config config/profiles/jetson_mixed.toml
+#
+# See: docs/deployment-profiles.md (Phase H),
+#      docs/adr/0014-mixed-transport-router.md,
+#      docs/adr/0009-per-peer-ring-sizing.md (SHM compute peers),
+#      config/profiles/jetson_prod.toml (all-SHM variant).
+
+[router]
+listen     = "shm:/rim_router"            # primary: SHM compute rings
+listen_uds = "uds:/tmp/rim_router.sock"   # Phase H: UDS subscribers dial this
+
+# --- Compute-side peers (control loop hot path) — SHM ---------------------
+
+[[peers]]
+id              = 1
+name            = "sensor"
+local           = "shm:/rim_router_sensor"
+shm_slot_count  = 256
+shm_max_payload = 64                 # ADR 0009 — one RouterFrame v2 per slot
+
+[[peers]]
+id              = 2
+name            = "controller"
+local           = "shm:/rim_router_controller"
+shm_slot_count  = 256
+shm_max_payload = 64
+
+[[peers]]
+id              = 4
+name            = "vision_capture"
+local           = "shm:/rim_router_vision_capture"
+shm_slot_count  = 256
+shm_max_payload = 64
+
+  [[peers.sideband]]
+  class             = "vision_nv12"
+  name              = "/rim_vision_nv12"
+  max_payload_bytes = 8388608        # 8 MB — one 1080p NV12 frame fits
+  memory_class      = "nvbufsurface"
+  cuda_device       = 0
+
+[[peers]]
+id              = 5
+name            = "ml_inference"
+local           = "shm:/rim_router_ml_inference"
+shm_slot_count  = 256
+shm_max_payload = 64
+
+  [[peers.sideband]]
+  class             = "ml_tensor_in"
+  name              = "/rim_ml_tensor_in"
+  max_payload_bytes = 16777216       # 16 MB
+  memory_class      = "cuda_managed"
+  cuda_device       = 0
+
+  [[peers.sideband]]
+  class             = "ml_tensor_out"
+  name              = "/rim_ml_tensor_out"
+  max_payload_bytes = 4194304        # 4 MB — typical model output is smaller
+  memory_class      = "cuda_managed"
+  cuda_device       = 0
+
+# --- IO-side peers (subscribers + bridges) — UDS --------------------------
+# These ride UDS in this profile: stateful consumers that prefer a socket to
+# a SHM ring. The mixed router delivers SHM-origin frames to them over UDS in
+# one hop (no bridge daemon). python_tooling (7) is also a SOURCE (source = 7
+# rule below); UDS datagram is bidirectional, and the router resolves its peer
+# id from the sender's bound socket path.
+
+[[peers]]
+id    = 3
+name  = "recorder"
+local = "uds:/tmp/rim_router_recorder.sock"
+
+[[peers]]
+id    = 7
+name  = "python_tooling"
+local = "uds:/tmp/rim_router_python_tooling.sock"
+
+[[peers]]
+id    = 8
+name  = "dashboard_feed"
+local = "uds:/tmp/rim_router_dashboard.sock"
+
+# --- Routes (identical to jetson_prod.toml — transport-agnostic) ----------
+
+[[routes]]
+source = 1                            # sensor    → controller + recorder + dashboard
+dest   = [2, 3, 8]
+
+[[routes]]
+source = 2                            # controller → recorder + python + dashboard
+dest   = [3, 7, 8]
+
+[[routes]]
+source = 4                            # vision    → ml + recorder + dashboard
+dest   = [5, 3, 8]
+
+[[routes]]
+source = 5                            # ml_inference → controller + recorder + dashboard
+dest   = [2, 3, 8]
+
+[[routes]]
+source = 7                            # python_tooling → recorder + dashboard
+dest   = [3, 8]

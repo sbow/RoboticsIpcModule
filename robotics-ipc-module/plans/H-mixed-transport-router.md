@@ -1,5 +1,7 @@
 # Phase H — Mixed-transport router (single-host heterogeneous links)
 
+> **Status: Delivered (2026-06-02).** Single-host mixed-transport routing shipped per [ADR 0014](../../docs/adr/0014-mixed-transport-router.md). `MixedRouterServer` (`ipc/src/router/mixed_router_server.hpp`) holds an optional link per present transport and drives them from one cooperative non-blocking poll loop; `forward()` was split into `try_receive` + public `send_to_peer`; the loader gained the multi-listen `[router]` schema (`listen_uds` / `listen_udp`) + per-transport listen validation; `jetson_mixed.toml` demonstrates SHM compute + UDS subscribers end-to-end. Cross-host federation (Option 1b) remains parked. **Two deviations from the deliverables below, both recorded in ADR 0014 §Consequences:** (1) the mixed shape ships as a *new* `jetson_mixed.toml` rather than mutating `jetson_prod.toml` in place — this preserves the all-SHM production default and its ring-sizing test while still shipping a mixed profile in `make ci`; (2) `link_concept.hpp` was left unchanged — `MixedRouterServer` is a concrete class against the two concrete links, so extending the `RouterLink` concept was unnecessary. `profile_switch_test` was left as-is; the new `mixed_transport_test` (SHM→UDS→SHM chain) plus the `jetson_mixed.toml` file-load case in `topology_loader_test` cover the mixed bind + cross-transport forward.
+
 **Skill:** `@ipc-robotics-phase-h` (install after adding skill file)
 **Depends on:** A (the templated `RouterServer<Link>` + `RouterLink` concept), B2 (topology loader — already accepts mixed transports), D2a (per-peer metrics the roll-up must preserve), **closed C5 Scope A** (`kMaxRouteDests`, `make_route`), **delivered [Phase G](G-declarative-routing.md)** (per-topic dispatch — `RouteTargets` are transport-agnostic peer ids, so per-topic routing composes with mixed transport for free).
 **Read:** [post-phases-robotics-review.md §C11](post-phases-robotics-review.md#c11--mixed-transport-networks) for the full options analysis (3 options + variants + decision rubric) this plan executes, and [docs/deployment-profiles.md §Known limitations](../../docs/deployment-profiles.md) for the F1 workaround this phase removes.
@@ -105,12 +107,12 @@ This is the transport-layer sibling of the routing-layer change Phase G made: Ph
 
 ## Review checklist
 
-- [ ] Templated single-transport `RouterServer<T>` / `ShmRouterServer` / `DatagramRouterServer<T>` are byte-for-byte unchanged in behavior (all existing `router_test` + integration cases green).
-- [ ] A mixed SHM + UDS profile binds all listen endpoints and forwards a cross-transport route end-to-end.
-- [ ] Loader rejects a peer whose transport has no matching `[router]` listen endpoint (replaces the silent-skip-then-crash).
-- [ ] SPSC egress invariant preserved (single thread writes each peer's ring; no data races under `make test-soak` / leak-check).
-- [ ] `make ci` clean; new ADR 0014 linked from `docs/adr/` and from this plan.
-- [ ] `mixed_transport_test` + updated `topology_loader_test` + `profile_switch_test` all green.
+- [x] Templated single-transport `RouterServer<T>` / `ShmRouterServer` / `DatagramRouterServer<T>` are byte-for-byte unchanged in behavior (all existing `router_test` + integration cases green).
+- [x] A mixed SHM + UDS profile binds all listen endpoints and forwards a cross-transport route end-to-end (`mixed_transport_test`: 1000-frame SHM→UDS→SHM chain; `jetson_mixed.toml` binds + logs `serving: SHM UDS`).
+- [x] Loader rejects a peer whose transport has no matching `[router]` listen endpoint (replaces the silent-skip-then-crash) — `topology_loader_test` "no uds listen" / "no udp listen" cases.
+- [x] SPSC egress invariant preserved (single cooperative thread writes each peer's ring; `mixed_transport_test` + `burst_sensor` clean, in-order, zero dups).
+- [x] `make ci` clean (modulo the pre-existing `burst_sensor` 99% timing bar, green in isolation); new ADR 0014 linked from `docs/adr/` and from this plan.
+- [x] `mixed_transport_test` (9/9) + updated `topology_loader_test` (205/205) green. `profile_switch_test` left unchanged (43/43); mixed bind covered by the `jetson_mixed.toml` file-load case instead.
 
 ## Acceptance
 

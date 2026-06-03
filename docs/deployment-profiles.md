@@ -25,7 +25,7 @@ All four profiles declare the same seven peers, with stable IDs per the [SYSTEM-
 | 4 | `vision_capture` | Interface + `memory_class` parser ([ADR 0012](adr/0012-sideband-memory-class.md)) — Phase F F5; capture binary deferred | CSI/V4L camera pipeline; metadata frames + NV12 sideband (`nvbufsurface` on Jetson, `shm` on x86) |
 | 5 | `ml_inference` | Interface + `memory_class` parser ([ADR 0012](adr/0012-sideband-memory-class.md)) — Phase F F5; TensorRT engine deferred (parked C1) | CUDA engine; metadata frames + tensor sidebands (`cuda_managed` on Jetson, `shm` on x86) |
 | 7 | `python_tooling` | **Implemented — Phase F F2** ([`examples/bridges/python_peer/`](../examples/bridges/python_peer/)) | Python subscriber / publisher; UDS today, ctypes RouterFrame port |
-| 8 | `dashboard_feed` | **Implemented** — Phase F F3 ([`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/)) | Node UDP → WebSocket gateway (stdlib only, no `npm install`); reachable on UDP profiles (`hil.toml`, `sim_cloud.toml`); UDS / SHM reachability tracked under parked C11 |
+| 8 | `dashboard_feed` | **Implemented** — Phase F F3 ([`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/)) | Node UDP → WebSocket gateway (stdlib only, no `npm install`); reachable on UDP profiles (`hil.toml`, `sim_cloud.toml`); on Jetson now reachable over **UDS in a mixed router** ([Phase H](../robotics-ipc-module/plans/H-mixed-transport-router.md), `jetson_mixed.toml`) — no SHM addon needed |
 
 **Peer ID 6 (`mavlink_gateway`) is intentionally absent until the F4 working binary lands.** The profile files leave room (port 19106 in `hil.toml`, address `10.0.0.7` in `sim_cloud.toml`, the obvious UDS path slot in `x86_dev.toml`, the SHM region name slot in `jetson_prod.toml`) so adding it later does not require renumbering. The F4 interface contract is locked — see [ADR 0011](adr/0011-device-bridge-transports.md) for the transport choice (UDS `SOCK_DGRAM`) and [`examples/bridges/mavlink_gateway/README.md`](../examples/bridges/mavlink_gateway/README.md) for the profile delta the working binary will append.
 
@@ -150,16 +150,28 @@ Sideband regions are **owned by the peer**, not the router. The bridge process (
 
 These limitations are baked into F1 and will be revisited as Phase F progresses and the parked review surfaces during the post-phases pass. None are profile-file issues — they are router / routing API constraints that the profiles **document honestly** rather than hide.
 
-### Single transport per router instance
+### Single transport per router instance — **resolved 2026-06-02 (Phase H, single-host)**
 
-The current router architecture is templated on one transport per `RouterServer<T>` instance. `ShmRouterLink::bind_router` silently skips non-SHM peers in the topology; `send_to_peer` throws if a route targets a peer it doesn't have a channel for. **Mixing SHM and UDS peers in one profile crashes the router on the first cross-transport forward.**
+> Historical note. Through Phase G the router was templated on one transport per `RouterServer<T>` instance. `ShmRouterLink::bind_router` silently skipped non-SHM peers; `send_to_peer` threw if a route targeted a peer it had no channel for. **Mixing SHM and UDS peers in one profile crashed the router on the first cross-transport forward**, which is why F1's `jetson_prod.toml` had to ride all six peers on SHM even though the recorder and dashboard_feed would prefer UDS.
 
-Consequence for F1: all six peers in `jetson_prod.toml` ride SHM, even though IO-heavy peers like the recorder (writes log files) and dashboard_feed (bridges to Node.js) would prefer UDS in production. Two workarounds an operator can apply today:
+[Phase H](../robotics-ipc-module/plans/H-mixed-transport-router.md) ([ADR 0014](adr/0014-mixed-transport-router.md)) lifts this for the **single-host** case. When a profile's peers span more than one transport kind, the entry point selects a non-templated **`MixedRouterServer`** that holds one link per present transport (SHM + UDS + UDP) and drives them from a single cooperative non-blocking poll loop. A frame received on one transport is delivered to a peer on another in **one in-process hop** — no bridge daemon, no second router. Egress is resolved per-destination from `PeerEntry::local.kind`, so routes (including Phase G per-topic rules) stay transport-agnostic. The templated single-transport path is unchanged and still used for homogeneous profiles. See [§Mixed-transport routing](#mixed-transport-routing-phase-h) below.
 
-- **Multi-router topology.** Run a second router process with a UDS-only profile, and have one bridge peer subscribe to the SHM router and republish to the UDS router. Not in F1 scope.
-- **Native SHM client in Node.js.** Use a small N-API addon to read the SHM ring directly. Heavy but feasible; the wire layout is documented in [ADR 0008](adr/0008-router-frame-v2.md) §RouterFrame v2.
+**Cross-host** federation (stitching per-host routers over UDP) remains the parked stage-two follow-on — [C11 §Mixed-transport networks](../robotics-ipc-module/plans/post-phases-robotics-review.md#c11--mixed-transport-networks) Option 1b.
 
-The proper fix — a `MixedTransportRouterLink` that fans out across SHM/UDS/UDP from a single instance, or alternatively a factory-generated bridge daemon pattern between single-transport routers, or peer-side dual-protocol bridges — is captured in [parked review C11 §Mixed-transport networks](../robotics-ipc-module/plans/post-phases-robotics-review.md#c11--mixed-transport-networks) (three options + variants, decision rubric, co-design hint with [C5 §Declarative transport gaps](../robotics-ipc-module/plans/post-phases-robotics-review.md#c5--declarative-transport-layer-gaps)).
+### Mixed-transport routing (Phase H)
+
+A mixed profile keeps the single back-compatible `[router].listen` and adds one listen endpoint per *additional* datagram transport it serves. SHM peers need no router listen (per-peer rings are derived from the topology):
+
+```toml
+[router]
+listen     = "shm:/rim_router"            # primary — SHM compute rings
+listen_uds = "uds:/tmp/rim_router.sock"   # UDS subscribers dial this
+# listen_udp = "udp:0.0.0.0:19100"        # add when UDP peers are present
+```
+
+The loader **validates** that every datagram peer has a matching router listen, rejecting the common mistake at load time (`peer 'recorder' is a uds peer but [router] has no uds listen …`) instead of crashing mid-forward. [`config/profiles/jetson_mixed.toml`](../config/profiles/jetson_mixed.toml) is the worked example: SHM for the compute hot path (sensor / controller / vision / ml), UDS for the stateful subscribers (recorder / python_tooling / dashboard_feed), with the same transport-agnostic route table as the all-SHM [`jetson_prod.toml`](../config/profiles/jetson_prod.toml) (preserved as the conservative variant).
+
+**Latency note.** The mixed router polls datagram sockets non-blocking, so UDS/UDP **idle pickup** costs up to one `idle_sleep_us` interval (default 1 ms, tunable to 0; [ADR 0007](adr/0007-router-idle-wake.md)) — only on the idle→first-frame transition, never under load, and the SHM hot path is unaffected. The all-SHM `jetson_prod.toml` avoids even that. See [ADR 0014](adr/0014-mixed-transport-router.md) §4.
 
 ### 2-destination cap — **closed 2026-05-28 (C5 Scope A)**
 
@@ -289,7 +301,7 @@ When deploying to a new host:
 | MAVLink gateway (peer 6) | **Phase F F4 interface + [ADR 0011](adr/0011-device-bridge-transports.md) shipped** — working binary deferred per the F4 plan; see [`examples/bridges/mavlink_gateway/README.md`](../examples/bridges/mavlink_gateway/README.md) for the locked interface |
 | Device-bridge transport selection (SPI / I²C / CAN / CAN-FD) | [ADR 0011](adr/0011-device-bridge-transports.md) — same ADR as F4, sibling sections; recommended bridges for downstream hardware-device integrations |
 | Vision + ML sideband `memory_class` parsing | **Phase F F5 shipped — [ADR 0012](adr/0012-sideband-memory-class.md)** (`shm` / `cuda_managed` / `cuda_host` / `nvbufsurface` parsed + validated in the topology loader); capture / CUDA mapping binaries deferred, see [`examples/bridges/vision_peer/`](../examples/bridges/vision_peer/) |
-| Mixed-transport router fanout (SHM + UDS + UDP from one router) | Parked review C11 — three options (factory bridge daemons / mixed-transport router / peer-side bridging) + decision rubric |
+| Mixed-transport router fanout (SHM + UDS + UDP from one router) | **Implemented (Phase H, single-host) 2026-06-02 — [ADR 0014](adr/0014-mixed-transport-router.md)** — `MixedRouterServer` fans out across SHM + UDS + UDP from one process in one hop; multi-listen `[router]` schema; `jetson_mixed.toml` demonstrates it. See [§Mixed-transport routing](#mixed-transport-routing-phase-h). **Cross-host** federation (Option 1b) stays parked under [C11](../robotics-ipc-module/plans/post-phases-robotics-review.md#c11--mixed-transport-networks) |
 | 2-destination cap, topic registry | **Closed 2026-05-28** — C5 Scopes A + B; see [§Topic registry](#topic-registry-optional) above and [parked review C5](../robotics-ipc-module/plans/post-phases-robotics-review.md#c5--declarative-transport-layer-gaps) |
 | Per-topic routing | **Implemented (Phase G) 2026-06-01 — [ADR 0013](adr/0013-per-topic-routing.md)** — `RouteRule` gained an optional `topic` selector; `route_targets_for` dispatches on `(source, topic_id)`, first-match-wins; `x86_dev.toml` demonstrates it. See [§Per-topic routes](#per-topic-routes-phase-g) above and [robotics-ipc-module/plans/G-declarative-routing.md](../robotics-ipc-module/plans/G-declarative-routing.md) |
 | Priority-aware QoS | **Parked (C7)** — former C5 Scope D merged into [C7 — Real-time / production knobs](../robotics-ipc-module/plans/post-phases-robotics-review.md#c7--real-time--production-knobs-mlockall-cpu-pinning-sched_fifo-priority-aware-qos) 2026-05-30 (latency-under-contention belongs with RT pinning, not with declarative routing) |
