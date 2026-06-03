@@ -179,7 +179,7 @@ See the closure notes in [parked review C5 §Closure — Scope A](../robotics-ip
 
 > Historical note. F1 declared peer 8 (`dashboard_feed`) for catalog completeness but the 2-destination cap left it with no inbound route in any profile.
 
-With C5 Scope A landed, every compute-side rule now lists `dashboard_feed` as a trailing destination, and the F3 Node gateway at [`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/) (UDP transport, stdlib only, no `npm install`) subscribes to the full system view without bridges editing the route table per deployment. On Jetson (SHM) an idle dashboard ring fills then drops as backpressure; on UDS / UDP an idle dashboard receiver causes per-destination failures that the datagram link does not yet isolate from earlier destinations in the same fan-out (parked alongside [Phase G — Declarative routing](../robotics-ipc-module/plans/G-declarative-routing.md), which can sidestep the symptom by giving dashboard a per-topic route instead of a tap on every rule).
+With C5 Scope A landed, every compute-side rule now lists `dashboard_feed` as a trailing destination, and the F3 Node gateway at [`examples/bridges/node_gateway/`](../examples/bridges/node_gateway/) (UDP transport, stdlib only, no `npm install`) subscribes to the full system view without bridges editing the route table per deployment. On Jetson (SHM) an idle dashboard ring fills then drops as backpressure; on UDS / UDP an idle dashboard receiver causes per-destination failures that the datagram link does not yet isolate from earlier destinations in the same fan-out. [Phase G — Declarative routing](../robotics-ipc-module/plans/G-declarative-routing.md) ([ADR 0013](adr/0013-per-topic-routing.md)) lets a deployment narrow the dashboard tap to specific topics (see [§Per-topic routes](#per-topic-routes-phase-g)) instead of tapping every rule — `x86_dev.toml` gates the sensor's dashboard tap to `imu_proprio` as the worked example.
 
 ### Peer 6 absent
 
@@ -228,7 +228,38 @@ Schema rules (enforced by [`topology_loader.hpp`](../ipc/src/router/topology_loa
 | `payload_class` | string | no | non-empty if present, ≤ 63 bytes; free-form (no whitelist) |
 | `sideband_idx` | u16 | no | 0..65535; defaults to `kSidebandIdxNone` (0xFFFF) — matches the `RouterFrame` default for "no sideband" |
 
-Consumer-side helpers live in [`router/topic_table.hpp`](../ipc/src/router/topic_table.hpp): `topic_by_id(topo, 100)`, `topic_by_name(topo, "imu_proprio")`. A `RouterTopology` with no `[[topics]]` declared has `topic_count == 0`; lookups against an empty registry return `nullptr` (safe). Promoting topics from a documented catalog to an actual dispatch key in `RouteRule` (formerly C5 Scope C) is now planned as a separate phase — see [Phase G — Declarative routing](../robotics-ipc-module/plans/G-declarative-routing.md).
+Consumer-side helpers live in [`router/topic_table.hpp`](../ipc/src/router/topic_table.hpp): `topic_by_id(topo, 100)`, `topic_by_name(topo, "imu_proprio")`. A `RouterTopology` with no `[[topics]]` declared has `topic_count == 0`; lookups against an empty registry return `nullptr` (safe). [Phase G](../robotics-ipc-module/plans/G-declarative-routing.md) promotes `topic_id` from a documented catalog to an actual dispatch key in `RouteRule` — see §Per-topic routes below.
+
+## Per-topic routes (Phase G)
+
+[Phase G](../robotics-ipc-module/plans/G-declarative-routing.md) ([ADR 0013](adr/0013-per-topic-routing.md)) makes `topic_id` a **routing key**: a `[[routes]]` entry may carry an optional `topic` selector so the router can dispatch on `(source, topic_id)`, not just `source`.
+
+```toml
+# imu_proprio (topic 100) from the sensor reaches the dashboard (8) too…
+[[routes]]
+source = 1
+topic  = 100
+dest   = [2, 3, 8]
+
+# …every other sensor topic goes only to controller + recorder.
+[[routes]]
+source = 1
+dest   = [2, 3]
+```
+
+Semantics:
+
+- **Optional and backward compatible.** A route without `topic` matches **any** topic — exactly the pre-Phase-G source-only behavior. Every Phase A–F profile loads unchanged; migrate one rule at a time.
+- **First-match-wins, in declaration order.** A topic-specific rule **must precede** the source-only catch-all for the same source, or the catch-all shadows it (the first matching rule wins). The example above relies on this ordering.
+- **Registry-validated.** A route's `topic` must reference an `id` declared in `[[topics]]`; the loader rejects an unknown id (`route topic id N does not match any [[topics]] entry`) at load time, just like an unknown peer in `dest`. `topic = 0xFFFF` is rejected — it is reserved as the internal `kRouteTopicAny` match-any sentinel; valid topics are `0..65534`.
+
+`x86_dev.toml` ships the worked example above (the sensor's dashboard tap is topic-gated to `imu_proprio`). Compile-time topologies use the `make_topic_route(source, topic, dests…)` factory ([`routing.hpp`](../ipc/src/router/routing.hpp)), the per-topic sibling of `make_route`.
+
+| Field | Type | Required | Constraints |
+|-------|------|----------|-------------|
+| `topic` | u16 | no | `0..65534`; must reference a declared `[[topics]]` id; omit for source-only (match-any) |
+
+Out of scope for the first cut (parked as follow-ons): wildcard / pattern topic matching, topic-driven multi-routing (one frame fanning out via several matching rules), and topic-level delivery/QoS attributes (which belong with [C7](../robotics-ipc-module/plans/post-phases-robotics-review.md#c7--real-time--production-knobs-mlockall-cpu-pinning-sched_fifo-priority-aware-qos)).
 
 ## Operator hand-off checklist
 
@@ -260,7 +291,7 @@ When deploying to a new host:
 | Vision + ML sideband `memory_class` parsing | **Phase F F5 shipped — [ADR 0012](adr/0012-sideband-memory-class.md)** (`shm` / `cuda_managed` / `cuda_host` / `nvbufsurface` parsed + validated in the topology loader); capture / CUDA mapping binaries deferred, see [`examples/bridges/vision_peer/`](../examples/bridges/vision_peer/) |
 | Mixed-transport router fanout (SHM + UDS + UDP from one router) | Parked review C11 — three options (factory bridge daemons / mixed-transport router / peer-side bridging) + decision rubric |
 | 2-destination cap, topic registry | **Closed 2026-05-28** — C5 Scopes A + B; see [§Topic registry](#topic-registry-optional) above and [parked review C5](../robotics-ipc-module/plans/post-phases-robotics-review.md#c5--declarative-transport-layer-gaps) |
-| Per-topic routing | **Planned (Phase G)** — former C5 Scope C promoted 2026-05-30. New ADR + `RouteRule` surgery + all profiles touched + integration tests rebuilt. See [robotics-ipc-module/plans/G-declarative-routing.md](../robotics-ipc-module/plans/G-declarative-routing.md) |
+| Per-topic routing | **Implemented (Phase G) 2026-06-01 — [ADR 0013](adr/0013-per-topic-routing.md)** — `RouteRule` gained an optional `topic` selector; `route_targets_for` dispatches on `(source, topic_id)`, first-match-wins; `x86_dev.toml` demonstrates it. See [§Per-topic routes](#per-topic-routes-phase-g) above and [robotics-ipc-module/plans/G-declarative-routing.md](../robotics-ipc-module/plans/G-declarative-routing.md) |
 | Priority-aware QoS | **Parked (C7)** — former C5 Scope D merged into [C7 — Real-time / production knobs](../robotics-ipc-module/plans/post-phases-robotics-review.md#c7--real-time--production-knobs-mlockall-cpu-pinning-sched_fifo-priority-aware-qos) 2026-05-30 (latency-under-contention belongs with RT pinning, not with declarative routing) |
 | Replay-grade recorder | Parked review C4 (replay needs a richer log format than today's CSV) |
 | TensorRT contract depth, CUDA memory_class, ARM CI, RT pinning, cross-host time, camera shape, consumption model | Parked review C1–C10 — see [plans/post-phases-robotics-review.md](../robotics-ipc-module/plans/post-phases-robotics-review.md) |

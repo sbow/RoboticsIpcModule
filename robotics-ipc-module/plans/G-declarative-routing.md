@@ -1,5 +1,7 @@
 # Phase G — Declarative routing (per-topic dispatch)
 
+> **Status: Delivered (2026-06-01).** All deliverables G1–G6 landed. `topic_id` is now a first-class routing key: `RouteRule` carries an optional `topic_id` selector (`kRouteTopicAny` sentinel = match-any), `route_targets_for` dispatches first-match-wins on `(source, topic_id)`, and the `[[routes]]` schema gained an optional `topic` field validated against `[[topics]]`. See [ADR 0013](../../docs/adr/0013-per-topic-routing.md). Wire format unchanged; backward compatible (a route without `topic` keeps source-only semantics, so every Phase A–F profile loads untouched). `x86_dev.toml` demonstrates per-topic dispatch (the sensor's dashboard tap is gated to `imu_proprio`). Tests: `routing_test` (85 assertions, +25), `topology_loader_test` (176, +22), new `topic_dispatch_test` (end-to-end SHM: 1 sensor × 3 topics × 3 subscribers, each receives only its topic). Full `make all` + unit + integration + router suites green.
+
 **Skill:** `@ipc-robotics-phase-g` (install after adding skill file)
 **Depends on:** B2 (topology loader), D1 (`route_targets_for` semantics), F2 (Python bridge — first real consumer of `topic_id`), **closed C5 Scope A** (`kMaxRouteDests = 8` + `make_route` factory), **closed C5 Scope B** (declarative `[[topics]]` registry).
 **Read:** [post-phases-robotics-review.md §C5](post-phases-robotics-review.md#c5--declarative-transport-layer-gaps) for the closure trail of Scopes A + B and the promotion rationale for Scope C.
@@ -95,11 +97,11 @@ All four `config/profiles/*.toml`:
 
 ## Review checklist
 
-- [ ] `RouteRule` change does not break any existing Phase A–F call site that does not opt in to per-topic dispatch.
-- [ ] Loader rejects unknown topic ids referenced from routes (mirrors existing "unknown peer id in dest" rejection).
-- [ ] At least one shipped profile demonstrates per-topic dispatch end-to-end.
-- [ ] `make ci` clean; new ADR linked from `docs/adr/` and from this plan.
-- [ ] `routing_test` + `topology_loader_test` + `topic_dispatch_test` all green.
+- [x] `RouteRule` change does not break any existing Phase A–F call site that does not opt in to per-topic dispatch. (`make_route` unchanged; `route_targets_for` 4th arg defaulted to `kRouteTopicAny`; all prior `routing_test` / integration cases green.)
+- [x] Loader rejects unknown topic ids referenced from routes (mirrors existing "unknown peer id in dest" rejection — `route topic id N does not match any [[topics]] entry`).
+- [x] At least one shipped profile demonstrates per-topic dispatch end-to-end. (`x86_dev.toml` sensor → topic-gated dashboard tap; `topic_dispatch_test` proves the SHM hot path.)
+- [x] `make ci` clean; new ADR ([0013](../../docs/adr/0013-per-topic-routing.md)) linked from `docs/adr/` and from this plan.
+- [x] `routing_test` + `topology_loader_test` + `topic_dispatch_test` all green.
 
 ## Acceptance
 

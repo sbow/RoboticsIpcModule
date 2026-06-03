@@ -29,6 +29,11 @@
 //   source = 1
 //   dest   = [2, 3, 8]                  # 1..kMaxRouteDests destinations
 //                                        # (C5 Scope A lifted the prior 2-dest cap)
+//   topic  = 100                        # Phase G, optional; restricts the rule
+//                                        # to frames with this topic_id. Omitted
+//                                        # => match any topic (source-only).
+//                                        # Must reference a [[topics]] id; 0xFFFF
+//                                        # reserved as the match-any sentinel.
 //
 //   [[topics]]                          # Phase F C5 Scope B, optional
 //   id            = 100                 # uint16, required, unique
@@ -464,6 +469,22 @@ inline void LoadedTopology::build_from_(const toml::table& root) {
                 rule.dest[k] = extract_id(k);
             }
 
+            // Phase G — optional per-topic selector. Absent => kRouteTopicAny
+            // (match any topic = legacy source-only behavior). The referenced
+            // topic id must exist in [[topics]]; that cross-section check runs
+            // as a second pass below, because [[topics]] is parsed after
+            // [[routes]] (a route may name a topic declared lower in the file).
+            rule.topic_id = kRouteTopicAny;
+            if (auto topic_opt = (*rt)["topic"].value<int64_t>()) {
+                if (*topic_opt < 0 || *topic_opt > 0xFFFE) {
+                    throw_load("[[routes]] entry #" + std::to_string(i)
+                               + " topic id " + std::to_string(*topic_opt)
+                               + " out of range 0..65534 "
+                                 "(0xFFFF reserved as match-any)");
+                }
+                rule.topic_id = static_cast<uint16_t>(*topic_opt);
+            }
+
             // Validate referenced peers exist
             auto peer_exists = [&](uint8_t pid) {
                 return std::any_of(out.peers_.begin(), out.peers_.end(),
@@ -586,6 +607,25 @@ inline void LoadedTopology::build_from_(const toml::table& root) {
             }
 
             out.topics_.push_back(topic);
+        }
+    }
+
+    // Phase G — per-topic route validation (second pass). A route that names
+    // a `topic` selector must reference an id declared in [[topics]]. Done
+    // after the topics block because routes are parsed first; this mirrors
+    // the inline "route dest does not match any peer" rejection, just across
+    // sections. Routes with kRouteTopicAny (no selector) are skipped.
+    for (size_t i = 0; i < out.routes_.size(); ++i) {
+        const uint16_t tid = out.routes_[i].topic_id;
+        if (tid == kRouteTopicAny) {
+            continue;
+        }
+        const bool topic_declared = std::any_of(
+            out.topics_.begin(), out.topics_.end(),
+            [tid](const TopicEntry& t) { return t.id == tid; });
+        if (!topic_declared) {
+            throw_load("route topic id " + std::to_string(tid)
+                       + " does not match any [[topics]] entry");
         }
     }
 }

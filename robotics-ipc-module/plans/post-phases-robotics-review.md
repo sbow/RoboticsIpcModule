@@ -154,7 +154,9 @@ At that point, walk each consideration, decide close / defer / scope into a new 
 
 ### C5 — Declarative transport layer (gaps)
 
-> **Status update — 2026-05-28:** Scopes A (lift 2-destination cap) and B (topic registry) closed during Phase F as a single deliverable. Scopes C (per-topic routing) and D (priority-aware QoS) remain parked. The original four-gap analysis is preserved below for context; closure notes follow.
+> **Status update — 2026-05-28:** Scopes A (lift 2-destination cap) and B (topic registry) closed during Phase F as a single deliverable. Scopes C (per-topic routing) and D (priority-aware QoS) remained parked.
+>
+> **Status update — 2026-06-01:** Scope C **delivered as [Phase G — Declarative routing](G-declarative-routing.md)** ([ADR 0013](../../docs/adr/0013-per-topic-routing.md)). Scope D remains parked, now owned by [C7](#c7--real-time--production-knobs-mlockall-cpu-pinning-sched_fifo-priority-aware-qos). **With Scope C delivered and Scope D merged, the C5 entry has no remaining sub-scopes.** The original four-gap analysis is preserved below for context; closure notes follow.
 
 **Finding (original).** A declarative transport layer exists at the per-peer level (TOML profiles cover address, ring sizing, sideband regions). What is **not** declarative: topic registry, per-topic routing, QoS, transport-kind as first-class.
 
@@ -172,7 +174,7 @@ At that point, walk each consideration, decide close / defer / scope into a new 
 
 1. **Document the current schema authoritatively** in [docs/robotics-reference-layout.md](../../docs/robotics-reference-layout.md) (E1) and treat the rest as publisher discipline.
 2. **Add a `[[topics]]` registry** (topic_id → name + sideband_idx + default payload class). Router behavior unchanged; tooling and bridges can validate. — **Closed by Scope B below.**
-3. **Make routes per-topic** (changes `RouteRule` shape, routing dispatch, all profiles). — **Parked as Scope C.**
+3. **Make routes per-topic** (changes `RouteRule` shape, routing dispatch, all profiles). — **Delivered as [Phase G](G-declarative-routing.md) ([ADR 0013](../../docs/adr/0013-per-topic-routing.md)), 2026-06-01.**
 4. **Make the router act on `priority`** (priority queue draining order in `forward_loop` and `ShmRouterLink::forward`). — **Parked as Scope D.**
 
 ---
@@ -206,11 +208,27 @@ At that point, walk each consideration, decide close / defer / scope into a new 
 
 **Tests.** New `ipc/test/topic_registry_test.cpp` (42 assertions): absent-section yields empty view, three-topic round-trip, lookup by id and by name, id=0 is legal, move-stable interned pointers, and seven loader-error cases (missing id, missing name, empty name, u16-overflow id, duplicate id, duplicate name, out-of-range `sideband_idx`, empty `payload_class`).
 
+#### Closure — Scope C: per-topic routing → Phase G (2026-06-01)
+
+**Trigger.** After the F4/F5 device bridges shipped, the gap was concrete: a consumer wanting one stream from a multi-topic publisher (dashboard wanting only `imu_proprio`; a MAVLink consumer wanting one `msgid`; an ML consumer wanting only the output tensor topic) had no declarative way to say so. The only workarounds — source-side process forking (one peer id per topic) or subscriber-side filtering (every consumer receives every frame) — push a *routing* concern into the wrong layer. Promoted to a phase on 2026-05-30 (see Re-classifications below) because the change touches the dispatch primitive, the wire-facing TOML schema, profiles, and the integration-test surface, and needs a new ADR.
+
+**Change.**
+
+- `ipc/src/router/routing.hpp` — `RouteRule` gains a `uint16_t topic_id` selector (default `kRouteTopicAny = 0xFFFF` = match-any). `route_targets_for(rules, count, source, topic_id = kRouteTopicAny)` is now a two-dimensional first-match-wins lookup: a rule matches when `source` matches **and** the rule's topic is `kRouteTopicAny` or equals the frame's topic. A `make_topic_route(source, topic, dests…)` constexpr factory joins `make_route` (which is unchanged and stays source-only). The hot path stays branch-light — a source-only rule short-circuits the topic compare.
+- `ipc/src/router/link.hpp` + `shm_router_link.hpp` — the two `forward()` hot paths pass `frame.topic_id()` into `route_targets_for`.
+- `ipc/src/router/topology_loader.hpp` — `[[routes]]` accepts an optional `topic` (u16, `0..65534`; `0xFFFF` rejected as the reserved sentinel). A second pass validates each per-topic route against the `[[topics]]` registry (topics are parsed after routes), rejecting unknown ids with `route topic id N does not match any [[topics]] entry` — mirroring the existing unknown-peer rejection.
+- `config/profiles/x86_dev.toml` — the sensor (source 1) route is split by topic: `imu_proprio` (topic 100) reaches the dashboard; every other sensor topic goes only to controller + recorder. First-match-wins requires the topic-specific rule to precede the source-only catch-all.
+- New ADR [0013](../../docs/adr/0013-per-topic-routing.md) records the dispatch-key change, the `kRouteTopicAny` sentinel choice, the TOML extension, and the three rejected alternatives (separate `[[topic_routes]]` array / multi-match union / dispatch-in-registry).
+
+**What Scope C / Phase G does NOT do.** No wire-format change (`topic_id` was already a u16 frame field, ADR 0008). No wildcard / pattern topic matching (exact integer match only). No topic-driven multi-routing (one frame still matches exactly one rule, first-match-wins). No topic-level QoS / delivery attributes — those belong with the C7 union. The `[[topics]]` registry stays declarative-only for *registration*; only the route table reads it (at load time) for *dispatch* validation.
+
+**Tests.** `routing_test` (85 assertions; +25 for Phase G: topic-specific match/skip, any-topic matches every topic, first-match-wins with topic-specific before catch-all, catch-all-shadows-topic hazard, multi-topic same-source selection, 3-arg backward-compat, `make_topic_route` constexpr). `topology_loader_test` (176 assertions; +22 for Phase G: per-topic route parses, default-to-match-any, unknown-topic rejection, no-`[[topics]]`-section rejection, `0xFFFF` rejection, and the `x86_dev.toml` per-topic rule shape). New `ipc/test/topic_dispatch_test.cpp` (8 assertions): 1 sensor publishes 3 topic_ids over SHM, 3 subscribers each declare a per-topic route, each receives **only** its declared topic (`recv[a=1000 b=1000 c=1000] wrong[0,0,0]`). All pre-Phase-G cases stay green (backward-compatibility gate).
+
 #### Re-classifications (2026-05-30)
 
 After the Scope A + B closure landed, the two remaining sub-scopes were re-evaluated against the "is this close-out work or is it a phase?" test. The answer was different for each:
 
-- **Scope C — per-topic routing → promoted to [Phase G — Declarative routing](G-declarative-routing.md).** Changing `RouteRule` semantics so the route table dispatches on `(source, topic_id)` pairs instead of just `source` is **not** close-out work: it changes the router's dispatch primitive, the wire-facing TOML schema (`[[routes]]` gains a `topic` selector), every shipped profile, and the integration-test surface. It also needs a new ADR (the dispatch-key change is an architectural commitment, not an implementation refinement). That is phase-shaped work, not a sub-scope. See the new plan file for the full deliverable list (G1 ADR, G2 `RouteRule` surgery, G3 loader, G4 profiles, G5 tests rebuilt, G6 docs) and the principle that source-only routes continue to load without modification (backward-compatible TOML surface, opt-in per rule).
+- **Scope C — per-topic routing → promoted to [Phase G — Declarative routing](G-declarative-routing.md) (promoted 2026-05-30; delivered 2026-06-01, [ADR 0013](../../docs/adr/0013-per-topic-routing.md) — see Closure above).** Changing `RouteRule` semantics so the route table dispatches on `(source, topic_id)` pairs instead of just `source` is **not** close-out work: it changes the router's dispatch primitive, the wire-facing TOML schema (`[[routes]]` gains a `topic` selector), every shipped profile, and the integration-test surface. It also needs a new ADR (the dispatch-key change is an architectural commitment, not an implementation refinement). That is phase-shaped work, not a sub-scope. See the new plan file for the full deliverable list (G1 ADR, G2 `RouteRule` surgery, G3 loader, G4 profiles, G5 tests rebuilt, G6 docs) and the principle that source-only routes continue to load without modification (backward-compatible TOML surface, opt-in per rule).
 - **Scope D — priority-aware QoS → merged into [C7 — Real-time / production knobs](#c7--real-time--production-knobs-mlockall-cpu-pinning-sched_fifo).** Priority-aware drain order and `SCHED_FIFO` / `MemoryLock` / `CPUAffinity` solve the same problem domain (latency under contention), share the same hot path (`ShmRouterLink::forward` + `DatagramRouterLink::forward`), and share the same systemd-directives surface in Phase E's unit files. They also share a failure mode: both manifest as p99 latency drift under load, not as a config-shape problem. Bundling them keeps the "what does it take to make this thing real-time-safe?" conversation in one place. See C7 §Options for the merged scope.
 
 The Scope A + B delivery was already enough to (i) close the F1 dashboard limitation and (ii) unblock bridge-side validation of `topic_id` semantics, which were the two concrete asks that surfaced during Phase F. With Scope C promoted and Scope D merged, the C5 entry has no remaining parked sub-scopes; both follow-on items now have an owning plan (Phase G for dispatch, C7 for QoS).
@@ -436,7 +454,7 @@ A reasonable two-stage migration: **Option 2 first** (lands single-host mixed-tr
 | C2 | CUDA / sideband `memory_class` | Unparsed | Phase F (F5) | 1 |
 | C3 | ARM / aarch64 verification | Docs only; no CI dim | Not planned | 3 |
 | C4 | Playback / sim on x86 | None; CSV recorder unusable | Not planned | 3 |
-| C5 | Declarative transport gaps | Per-peer only; no topic/QoS | Partial in E1 docs | 3 |
+| C5 | Declarative transport gaps | Per-peer only; no topic/QoS | A+B closed (F); C→Phase G delivered ([ADR 0013](../../docs/adr/0013-per-topic-routing.md)); D→C7 | — |
 | C6 | systemd readiness | No `sd_notify` | E2 (underspecified) | 2 |
 | C7 | RT pinning / `mlockall` | None | Not planned | 3 |
 | C8 | Cross-host time sync | `steady_clock` relative ns | E4 (forward-decl only) | 2 |
@@ -454,5 +472,7 @@ A reasonable two-stage migration: **Option 2 first** (lands single-host mixed-tr
 - [docs/adr/0005-payload-policy-and-sideband.md](../../docs/adr/0005-payload-policy-and-sideband.md)
 - [docs/adr/0008-router-frame-v2.md](../../docs/adr/0008-router-frame-v2.md)
 - [docs/adr/0009-per-peer-ring-sizing.md](../../docs/adr/0009-per-peer-ring-sizing.md)
+- [docs/adr/0013-per-topic-routing.md](../../docs/adr/0013-per-topic-routing.md) — Phase G, closes C5 Scope C
+- [robotics-ipc-module/plans/G-declarative-routing.md](G-declarative-routing.md) — Phase G plan (delivered)
 - [ipc/MODULE.md](../../ipc/MODULE.md)
 - Conversation: [Phase E fit-for-purpose review](f325cb57-00db-4d4e-a19c-2c45473839d1)

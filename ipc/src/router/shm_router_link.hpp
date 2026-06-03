@@ -92,7 +92,8 @@ public:
 
             ForwardResult result;
             result.source = source;
-            result.targets = route_targets_for(rules, rule_count, source);
+            result.targets = route_targets_for(rules, rule_count, source,
+                                                frame.topic_id());
             for (uint8_t dest : result.targets) {
                 send_to_peer(dest, buf);
             }

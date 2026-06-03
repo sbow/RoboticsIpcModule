@@ -273,6 +273,111 @@ void test_make_route_factory_is_constexpr_and_compact() {
     EXPECT_EQ(r2.dest_count, 4);
 }
 
+// ---------------------------------------------------------------------------
+// Phase G — per-topic dispatch (ADR 0013). route_targets_for is now a
+// two-dimensional first-match-wins lookup on (source, topic_id).
+// ---------------------------------------------------------------------------
+
+void test_topic_specific_rule_matches_only_its_topic() {
+    constexpr RouteRule rules[] = {
+        make_topic_route(1, 100, 2, 3),   // (source 1, topic 100) -> {2, 3}
+    };
+    // Matching topic dispatches.
+    RouteTargets hit = route_targets_for(rules, 1, 1, 100);
+    EXPECT_EQ(hit.count, 2u);
+    EXPECT_EQ(hit.ids[0], 2);
+    EXPECT_EQ(hit.ids[1], 3);
+    // Same source, different topic: rule is skipped, no other rule matches.
+    EXPECT_EQ(route_targets_for(rules, 1, 1, 200).count, 0u);
+    // Right topic, wrong source: no match.
+    EXPECT_EQ(route_targets_for(rules, 1, 9, 100).count, 0u);
+}
+
+void test_topic_any_rule_matches_every_topic() {
+    // make_route => kRouteTopicAny: matches regardless of the frame topic.
+    constexpr RouteRule rules[] = {
+        make_route(1, 2),
+    };
+    EXPECT_EQ(route_targets_for(rules, 1, 1, 0).count, 1u);
+    EXPECT_EQ(route_targets_for(rules, 1, 1, 100).count, 1u);
+    EXPECT_EQ(route_targets_for(rules, 1, 1, 65534).count, 1u);
+    // And the topic-less (3-arg) call still matches an any-topic rule.
+    EXPECT_EQ(route_targets_for(rules, 1, 1).count, 1u);
+}
+
+void test_topic_specific_before_catchall_first_match_wins() {
+    // Declaration order: topic-specific rule precedes the source-only
+    // catch-all for the same source (the x86_dev.toml pattern).
+    constexpr RouteRule rules[] = {
+        make_topic_route(1, 100, 2, 3, 8),   // imu_proprio -> controller+recorder+dashboard
+        make_route(1, 2, 3),                 // any other sensor topic -> controller+recorder
+    };
+    // topic 100 hits the specific rule (dashboard included).
+    RouteTargets t100 = route_targets_for(rules, 2, 1, 100);
+    EXPECT_EQ(t100.count, 3u);
+    EXPECT_EQ(t100.ids[2], 8);
+    // any other topic falls through to the catch-all (no dashboard).
+    RouteTargets t200 = route_targets_for(rules, 2, 1, 200);
+    EXPECT_EQ(t200.count, 2u);
+    EXPECT_EQ(t200.ids[0], 2);
+    EXPECT_EQ(t200.ids[1], 3);
+}
+
+void test_catchall_before_topic_rule_shadows_it() {
+    // Reverse order: the source-only rule appears first and shadows the
+    // topic-specific rule (documented first-match-wins hazard). The
+    // topic-specific rule is dead for source 1.
+    constexpr RouteRule rules[] = {
+        make_route(1, 2, 3),               // matches ANY topic first
+        make_topic_route(1, 100, 8),       // never reached for source 1
+    };
+    RouteTargets t = route_targets_for(rules, 2, 1, 100);
+    EXPECT_EQ(t.count, 2u);
+    EXPECT_EQ(t.ids[0], 2);
+    EXPECT_EQ(t.ids[1], 3);
+}
+
+void test_multiple_topic_rules_same_source_select_by_topic() {
+    constexpr RouteRule rules[] = {
+        make_topic_route(1, 100, 2),
+        make_topic_route(1, 200, 3),
+        make_topic_route(1, 300, 4),
+        make_route(1, 9),                  // default tap for the rest
+    };
+    EXPECT_EQ(route_targets_for(rules, 4, 1, 100).ids[0], 2);
+    EXPECT_EQ(route_targets_for(rules, 4, 1, 200).ids[0], 3);
+    EXPECT_EQ(route_targets_for(rules, 4, 1, 300).ids[0], 4);
+    EXPECT_EQ(route_targets_for(rules, 4, 1, 999).ids[0], 9);
+}
+
+void test_three_arg_call_is_source_only_backward_compat() {
+    // The defaulted topic_id (kRouteTopicAny) means a topic-unaware caller
+    // matches only any-topic rules; topic-specific rules are skipped. This
+    // is exactly the pre-Phase-G behaviour and is what keeps every legacy
+    // 3-arg route_targets_for call site green.
+    constexpr RouteRule rules[] = {
+        make_topic_route(1, 100, 2),       // topic-specific
+        make_route(4, 5),                  // any-topic
+    };
+    EXPECT_EQ(route_targets_for(rules, 2, 1).count, 0u);   // skipped
+    EXPECT_EQ(route_targets_for(rules, 2, 4).count, 1u);   // matched
+}
+
+void test_make_topic_route_factory_is_constexpr() {
+    constexpr RouteRule r = make_topic_route(1, 100, 2, 3);
+    static_assert(r.source == 1, "");
+    static_assert(r.topic_id == 100, "");
+    static_assert(r.dest_count == 2, "");
+    static_assert(r.dest[0] == 2, "");
+    static_assert(r.dest[1] == 3, "");
+    // make_route leaves topic_id at the match-any sentinel.
+    constexpr RouteRule any = make_route(1, 2);
+    static_assert(any.topic_id == kRouteTopicAny, "");
+
+    EXPECT_EQ(r.topic_id, 100);
+    EXPECT(any.topic_id == kRouteTopicAny);
+}
+
 }  // namespace
 
 int main() {
@@ -293,6 +398,15 @@ int main() {
     test_mixed_width_rules_in_same_table();
     test_dest_count_truncation_does_not_leak_tail();
     test_make_route_factory_is_constexpr_and_compact();
+
+    // Phase G — per-topic dispatch (ADR 0013)
+    test_topic_specific_rule_matches_only_its_topic();
+    test_topic_any_rule_matches_every_topic();
+    test_topic_specific_before_catchall_first_match_wins();
+    test_catchall_before_topic_rule_shadows_it();
+    test_multiple_topic_rules_same_source_select_by_topic();
+    test_three_arg_call_is_source_only_backward_compat();
+    test_make_topic_route_factory_is_constexpr();
 
     std::cout << "routing_test: " << (g_total - g_failed) << '/'
               << g_total << " assertions passed\n";

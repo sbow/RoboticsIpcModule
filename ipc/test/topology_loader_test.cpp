@@ -370,20 +370,24 @@ void test_load_from_file() {
     // reserved for F4. C5 Scope A widened every compute-side rule with
     // dashboard (8) as a trailing destination, closing the F1 dashboard
     // limitation:
-    //   1 -> [2, 3, 8]   (sensor    → controller + recorder + dashboard)
+    // Phase G (ADR 0013) then split the sensor (source 1) rule by topic —
+    // the dashboard taps only imu_proprio (topic 100):
+    //   1 (topic 100) -> [2, 3, 8]  (imu_proprio → controller + recorder + dashboard)
+    //   1 (any topic) -> [2, 3]     (other sensor topics → controller + recorder)
     //   2 -> [3, 7, 8]   (controller → recorder + python + dashboard)
     //   4 -> [5, 3, 8]   (vision    → ml + recorder + dashboard)
     //   5 -> [2, 3, 8]   (ml        → controller + recorder + dashboard)
     //   7 -> [3, 8]      (python    → recorder + dashboard)
-    // The 5-route count is unchanged from F2 — Scope A widened existing
-    // rules rather than adding new ones. The [[topics]] section
-    // demonstrates the C5 Scope B declarative topic registry (4 topics).
+    // Route count went from 5 (F2 / C5 Scope A) to 6 — Phase G added the
+    // source-only catch-all alongside the topic-specific sensor rule. The
+    // [[topics]] section demonstrates the C5 Scope B declarative topic
+    // registry (4 topics), now also referenced by the per-topic route.
     LoadedTopology topo = load_topology_from_toml_file(
         "config/profiles/x86_dev.toml");
     const RouterTopology view = topo.view();
     EXPECT_EQ(view.peer_count, static_cast<std::size_t>(7));
     EXPECT(view.router_listen.kind == PeerAddressKind::UdsPath);
-    EXPECT_EQ(topo.route_count(), static_cast<std::size_t>(5));
+    EXPECT_EQ(topo.route_count(), static_cast<std::size_t>(6));
 
     // 8-peer catalog stable IDs: peer 6 (mavlink_gateway) is reserved for F4.
     EXPECT(peer_by_id(view, 1) != nullptr);                  // sensor
@@ -395,19 +399,28 @@ void test_load_from_file() {
     EXPECT(peer_by_id(view, 7) != nullptr);                  // python_tooling (F2)
     EXPECT(peer_by_id(view, 8) != nullptr);                  // dashboard_feed
 
-    // C5 Scope A — dashboard (8) is now wired into the sensor fan-out.
-    // The exact route shape: [2, 3, 8] in order, dest_count == 3.
+    // Phase G — rule[0] is the topic-specific sensor rule (topic 100 →
+    // [2, 3, 8] incl. dashboard); rule[1] is the source-only catch-all
+    // (any other sensor topic → [2, 3], no dashboard). First-match-wins
+    // requires the topic rule to precede the catch-all.
     const RouteRule* rules = topo.routes();
     EXPECT_EQ(static_cast<int>(rules[0].source),     1);
+    EXPECT_EQ(static_cast<int>(rules[0].topic_id),   100);
     EXPECT_EQ(static_cast<int>(rules[0].dest_count), 3);
     EXPECT_EQ(static_cast<int>(rules[0].dest[0]),    2);
     EXPECT_EQ(static_cast<int>(rules[0].dest[1]),    3);
     EXPECT_EQ(static_cast<int>(rules[0].dest[2]),    8);
+    EXPECT_EQ(static_cast<int>(rules[1].source),     1);
+    EXPECT(rules[1].topic_id == kRouteTopicAny);             // source-only catch-all
+    EXPECT_EQ(static_cast<int>(rules[1].dest_count), 2);
+    EXPECT_EQ(static_cast<int>(rules[1].dest[0]),    2);
+    EXPECT_EQ(static_cast<int>(rules[1].dest[1]),    3);
     // Last rule — python_tooling fans out to recorder + dashboard.
-    EXPECT_EQ(static_cast<int>(rules[4].source),     7);
-    EXPECT_EQ(static_cast<int>(rules[4].dest_count), 2);
-    EXPECT_EQ(static_cast<int>(rules[4].dest[0]),    3);
-    EXPECT_EQ(static_cast<int>(rules[4].dest[1]),    8);
+    EXPECT_EQ(static_cast<int>(rules[5].source),     7);
+    EXPECT(rules[5].topic_id == kRouteTopicAny);
+    EXPECT_EQ(static_cast<int>(rules[5].dest_count), 2);
+    EXPECT_EQ(static_cast<int>(rules[5].dest[0]),    3);
+    EXPECT_EQ(static_cast<int>(rules[5].dest[1]),    8);
 
     // C5 Scope B — the [[topics]] section in x86_dev.toml registers
     // four topics; the loader populates view.topics so bridges and
@@ -710,6 +723,57 @@ void test_route_with_max_destinations_parses() {
     EXPECT_EQ(static_cast<int>(rules[0].dest[7]),    9);
 }
 
+// --- Phase G — per-topic routing (ADR 0013) ------------------------------
+
+constexpr const char* kPerTopicRoute = R"(
+[router]
+listen = "uds:/tmp/r.sock"
+[[peers]]
+id = 1
+name = "sensor"
+local = "uds:/tmp/p1.sock"
+[[peers]]
+id = 2
+name = "controller"
+local = "uds:/tmp/p2.sock"
+[[peers]]
+id = 3
+name = "recorder"
+local = "uds:/tmp/p3.sock"
+[[routes]]
+source = 1
+topic  = 100
+dest   = [2, 3]
+[[routes]]
+source = 1
+dest   = [2]
+[[topics]]
+id   = 100
+name = "imu_proprio"
+)";
+
+void test_per_topic_route_parses() {
+    LoadedTopology topo = load_topology_from_toml_string(kPerTopicRoute);
+    EXPECT_EQ(topo.route_count(), static_cast<std::size_t>(2));
+    const RouteRule* rules = topo.routes();
+    // Topic-specific rule first (first-match-wins precedence).
+    EXPECT_EQ(static_cast<int>(rules[0].source),     1);
+    EXPECT_EQ(static_cast<int>(rules[0].topic_id),   100);
+    EXPECT_EQ(static_cast<int>(rules[0].dest_count), 2);
+    // Source-only catch-all defaults to the match-any sentinel — a route
+    // declared after a topics block resolves fine (topics parsed first pass,
+    // route topic validated second pass; this route has no topic to resolve).
+    EXPECT_EQ(static_cast<int>(rules[1].source),     1);
+    EXPECT(rules[1].topic_id == kRouteTopicAny);
+}
+
+void test_route_without_topic_defaults_to_match_any() {
+    // kThreeDestRoute declares a route with no `topic` field.
+    LoadedTopology topo = load_topology_from_toml_string(kThreeDestRoute);
+    const RouteRule* rules = topo.routes();
+    EXPECT(rules[0].topic_id == kRouteTopicAny);
+}
+
 void test_errors() {
     expect_load_error("", "missing [router] section");
 
@@ -893,6 +957,66 @@ local = "uds:/tmp/c.sock"
 source = 1
 dest = [2, 3, 2]
 )", "duplicate dest id");
+
+    // Phase G (ADR 0013) — a route `topic` selector must reference a declared
+    // [[topics]] id. Topic 100 is never declared here.
+    expect_load_error(R"(
+[router]
+listen = "uds:/tmp/r.sock"
+[[peers]]
+id = 1
+name = "a"
+local = "uds:/tmp/a.sock"
+[[peers]]
+id = 2
+name = "b"
+local = "uds:/tmp/b.sock"
+[[routes]]
+source = 1
+topic  = 100
+dest = [2]
+)", "does not match any [[topics]] entry");
+
+    // Phase G — a route topic referencing a topic id when no [[topics]]
+    // section exists at all is the same unknown-topic rejection.
+    expect_load_error(R"(
+[router]
+listen = "uds:/tmp/r.sock"
+[[peers]]
+id = 1
+name = "a"
+local = "uds:/tmp/a.sock"
+[[peers]]
+id = 2
+name = "b"
+local = "uds:/tmp/b.sock"
+[[routes]]
+source = 1
+topic  = 7
+dest = [2]
+)", "does not match any [[topics]] entry");
+
+    // Phase G — 0xFFFF (65535) is reserved as the kRouteTopicAny sentinel and
+    // is rejected as a literal route topic.
+    expect_load_error(R"(
+[router]
+listen = "uds:/tmp/r.sock"
+[[peers]]
+id = 1
+name = "a"
+local = "uds:/tmp/a.sock"
+[[peers]]
+id = 2
+name = "b"
+local = "uds:/tmp/b.sock"
+[[routes]]
+source = 1
+topic  = 65535
+dest = [2]
+[[topics]]
+id   = 100
+name = "t"
+)", "out of range 0..65534");
 }
 
 }  // namespace
@@ -920,6 +1044,10 @@ int main() {
     // Phase F C5 Scope A — fan-out beyond two destinations.
     test_route_with_three_destinations_parses();
     test_route_with_max_destinations_parses();
+
+    // Phase G (ADR 0013) — per-topic routing.
+    test_per_topic_route_parses();
+    test_route_without_topic_defaults_to_match_any();
 
     std::cout << "topology_loader_test: " << (g_total - g_failed) << '/'
               << g_total << " assertions passed\n";

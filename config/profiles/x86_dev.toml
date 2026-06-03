@@ -30,17 +30,23 @@
 # declared here — F4 will append it.
 #
 # Routes use the C5 Scope A lifted fan-out cap (kMaxRouteDests = 8 in
-# ipc/src/router/routing.hpp). dashboard_feed (8) is now a tap on every
-# compute-side rule, closing the F1 "dashboard has no inbound route"
-# limitation. python_tooling (7) is reached via the `source = 2` tap
-# (F2). Listing 8 at the end of every dest array preserves the pre-C5
-# delivery order to the other destinations.
+# ipc/src/router/routing.hpp). dashboard_feed (8) taps the compute-side
+# rules, closing the F1 "dashboard has no inbound route" limitation.
+# python_tooling (7) is reached via the `source = 2` tap (F2). Listing 8 at
+# the end of a dest array preserves the pre-C5 delivery order to the other
+# destinations.
+#
+# Phase G (ADR 0013): the sensor (source 1) route is split by topic — the
+# dashboard taps only imu_proprio (topic 100), demonstrating per-topic
+# dispatch. The `topic` selector references a [[topics]] id (below); a rule
+# without `topic` matches any topic (source-only, legacy behaviour).
 #
 # Usage:
 #   ./build/ipc/test/router_server --config config/profiles/x86_dev.toml
 #
-# See: docs/deployment-profiles.md (Phase F F1, C5 Scopes A+B),
+# See: docs/deployment-profiles.md (Phase F F1, C5 Scopes A+B, Phase G),
 #      docs/adr/0004-robotics-module-boundaries.md (module surface),
+#      docs/adr/0013-per-topic-routing.md (per-topic dispatch),
 #      ipc/src/router/topology_loader.hpp (schema).
 
 [router]
@@ -109,10 +115,22 @@ name  = "dashboard_feed"
 local = "uds:/tmp/rim_router_dashboard.sock"
 
 # --- Routes (kMaxRouteDests = 8 per closed C5 Scope A) --------------------
+#
+# Phase G (ADR 0013) — per-topic dispatch demonstration on the sensor.
+# The dashboard (8) taps only the imu_proprio stream (topic 100), not every
+# sensor frame; controller (2) and recorder (3) still see all sensor frames
+# via the source-only catch-all that follows. First-match-wins: the
+# topic-specific rule MUST precede the catch-all, or the catch-all shadows
+# it. A route's `topic` must reference a [[topics]] id declared below.
 
 [[routes]]
-source = 1                            # sensor    → controller + recorder + dashboard
+source = 1                            # sensor imu_proprio → controller + recorder + dashboard
+topic  = 100
 dest   = [2, 3, 8]
+
+[[routes]]
+source = 1                            # any other sensor topic → controller + recorder
+dest   = [2, 3]
 
 [[routes]]
 source = 2                            # controller → recorder + python + dashboard

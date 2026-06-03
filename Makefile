@@ -74,6 +74,9 @@ IPC_BURST_SENSOR_TEST     := $(IPC_TEST_DIR)/burst_sensor_test
 IPC_PROFILE_SWITCH_TEST   := $(IPC_TEST_DIR)/profile_switch_test
 IPC_ROUTER_RESTART_TEST   := $(IPC_TEST_DIR)/router_restart_test
 
+# Phase G — per-topic dispatch integration test (ADR 0013).
+IPC_TOPIC_DISPATCH_TEST   := $(IPC_TEST_DIR)/topic_dispatch_test
+
 # Phase D4 fault injection.
 IPC_FAULT_INJECTION_TEST  := $(IPC_TEST_DIR)/fault_injection_test
 
@@ -98,7 +101,8 @@ ALL_TARGETS := \
 	$(IPC_PROFILE_SWITCH_TEST) \
 	$(IPC_ROUTER_RESTART_TEST) \
 	$(IPC_FAULT_INJECTION_TEST) \
-	$(IPC_TOPIC_REGISTRY_TEST)
+	$(IPC_TOPIC_REGISTRY_TEST) \
+	$(IPC_TOPIC_DISPATCH_TEST)
 
 .PHONY: all clean debug help test-ipc test-ipc-shm test-router \
 	test-ipc-unit test-topology-loader test-last-value-cache \
@@ -107,6 +111,7 @@ ALL_TARGETS := \
 	test-topic-registry \
 	test-ipc-integration test-slow-recorder test-burst-sensor \
 	test-profile-switch test-router-restart test-fault-injection \
+	test-topic-dispatch \
 	build-ipc-unit build-ipc-integration \
 	test-soak test-leak-check test-idle-cpu test-latency-histogram \
 	ci \
@@ -197,6 +202,12 @@ $(IPC_BURST_SENSOR_TEST): $(IPC_ROOT)/test/burst_sensor_test.cpp \
 		$(IPC_IPC_HEADERS) $(IPC_ROUTER_HEADERS) | $(IPC_TEST_DIR)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(IPC_TEST_FLAGS) $(IPC_TEST_LDFLAGS) -o $@ $<
 
+# Phase G — topic_dispatch_test uses ShmRouterLink + std::thread directly
+# (no fork, no toml), same shape as burst_sensor_test.
+$(IPC_TOPIC_DISPATCH_TEST): $(IPC_ROOT)/test/topic_dispatch_test.cpp \
+		$(IPC_IPC_HEADERS) $(IPC_ROUTER_HEADERS) | $(IPC_TEST_DIR)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(IPC_TEST_FLAGS) $(IPC_TEST_LDFLAGS) -o $@ $<
+
 $(IPC_PROFILE_SWITCH_TEST): $(IPC_ROOT)/test/profile_switch_test.cpp \
 		$(IPC_IPC_HEADERS) $(IPC_ROUTER_HEADERS) \
 		$(THIRD_PARTY)/tomlplusplus/toml.hpp | $(IPC_TEST_DIR)
@@ -275,7 +286,7 @@ build-ipc-unit: $(IPC_FRAME_TEST) $(IPC_TOPOLOGY_LOADER_TEST) \
 
 build-ipc-integration: $(IPC_SLOW_RECORDER_TEST) $(IPC_BURST_SENSOR_TEST) \
 	$(IPC_PROFILE_SWITCH_TEST) $(IPC_ROUTER_RESTART_TEST) \
-	$(IPC_FAULT_INJECTION_TEST) $(IPC_ROUTER_SERVER)
+	$(IPC_FAULT_INJECTION_TEST) $(IPC_TOPIC_DISPATCH_TEST) $(IPC_ROUTER_SERVER)
 
 # Sequence sub-makes so the children run serially even when the parent
 # was invoked with -j. test-ipc-unit's children are independent today
@@ -313,12 +324,16 @@ test-router-restart: $(IPC_ROUTER_RESTART_TEST) $(IPC_ROUTER_SERVER)
 test-fault-injection: $(IPC_FAULT_INJECTION_TEST) $(IPC_ROUTER_SERVER)
 	./$(IPC_FAULT_INJECTION_TEST)
 
+test-topic-dispatch: $(IPC_TOPIC_DISPATCH_TEST)
+	./$(IPC_TOPIC_DISPATCH_TEST)
+
 test-ipc-integration: build-ipc-integration
 	@$(MAKE) test-slow-recorder
 	@$(MAKE) test-burst-sensor
 	@$(MAKE) test-profile-switch
 	@$(MAKE) test-router-restart
 	@$(MAKE) test-fault-injection
+	@$(MAKE) test-topic-dispatch
 
 # Phase D3 — stress / soak scripts. These wrap the existing test
 # binaries and add timing, leak detection, and CPU regression gates.
