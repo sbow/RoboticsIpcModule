@@ -45,7 +45,7 @@ At that point, walk each consideration, decide close / defer / scope into a new 
 
 ## Group 3 — Not in any current plan (needs explicit decision)
 
-- **C3** ARM / aarch64 verification
+- **C3** ARM / aarch64 verification — **closed 2026-06-03** (native `ubuntu-24.04-arm` CI matrix leg; full suite green)
 - **C4** Playback / simulation testing on x86
 - **C5** Declarative transport gaps — Scopes A + B closed 2026-05-28; Scope C promoted to [Phase G](G-declarative-routing.md) 2026-05-30; Scope D merged into C7 below
 - **C7** Real-time / production knobs (`mlockall`, CPU pinning, SCHED_FIFO) + priority-aware QoS — **closed 2026-06-03** (opt-in RT hooks + drop-lowest-first SHM QoS; [ADR 0016](../../docs/adr/0016-rt-hardening-and-priority-qos.md))
@@ -102,6 +102,8 @@ At that point, walk each consideration, decide close / defer / scope into a new 
 
 ### C3 — ARM / aarch64 verification
 
+> **CLOSED — 2026-06-03 (Option 3).** `.github/workflows/ci.yml` is now a 2-arch matrix: the full `make ci` suite (build + unit + integration + router + leak-check) runs on both `ubuntu-latest` (x86_64) and `ubuntu-24.04-arm` (native aarch64) — GitHub's free arm64 hosted runners for public repos, no QEMU / cross-compile. First green arm64 run: commit `bd6869b` (both legs `success`, arm64 ≈ same wall time as x64). This proves the header-only C++20 / atomics / framing code is aarch64-clean (ABI, 64-bit atomics, endianness, `mlockall`/`sched_setaffinity`/`MSG_NOSIGNAL` syscalls) — the "should be, but never verified" gap is closed. **Residual (not a CI concern):** the runner is a Neoverse N2 server core, not a Jetson Orin Cortex-A78AE on L4T; true on-Jetson hardware validation remains an out-of-band operator check (the code has no SIMD / Tegra-specific paths, so this is ABI-equivalent for our purposes).
+
 **Finding.** Jetson (aarch64, L4T) is the named target ([ipc/MODULE.md](../../ipc/MODULE.md) line ~16, [docs/adr/0004-robotics-module-boundaries.md](../../docs/adr/0004-robotics-module-boundaries.md) line ~117, [docs/adr/0008-router-frame-v2.md](../../docs/adr/0008-router-frame-v2.md) lines ~57, ~94) but the module has never actually been built or tested on aarch64 hardware in CI.
 
 **Evidence.**
@@ -117,6 +119,8 @@ At that point, walk each consideration, decide close / defer / scope into a new 
 1. **Document only** — add an aarch64 build recipe to `ipc/MODULE.md`. Run it on actual hardware out-of-band; record result in [STATUS.md](../STATUS.md). No CI change.
 2. **Cross-compile CI** — add `aarch64-linux-gnu-g++` cross-build matrix to [.github/workflows/ci.yml](../../.github/workflows/ci.yml). Builds only; no execution.
 3. **Full aarch64 test CI** — use `qemu-user-static` or GitHub's ARM runners to actually execute the suite. Highest confidence, highest cost.
+
+**Decision (2026-06-03).** **Option 3, native (no QEMU).** GitHub now offers free native arm64 hosted runners (`ubuntu-24.04-arm`) for public repositories, which turned the "highest confidence" option into the cheapest one — a matrix leg, not an emulation harness. Implemented as a `fail-fast: false` arch matrix in `ci.yml`; both legs green on `bd6869b`.
 
 ---
 
@@ -496,7 +500,7 @@ The Phase H foundation makes Option 1b cheaper than it was when first written: e
 |----|----|----|----|----|
 | C1 | TensorRT integration contract | Peer named, no contract | Phase F (F5 sketch) | 1 |
 | C2 | CUDA / sideband `memory_class` | Unparsed | Phase F (F5) | 1 |
-| C3 | ARM / aarch64 verification | Docs only; no CI dim | Not planned | 3 |
+| C3 | ARM / aarch64 verification | **Closed 2026-06-03** — native `ubuntu-24.04-arm` CI matrix leg, full suite green (`bd6869b`) | C3 closure | 3 |
 | C4 | Playback / sim on x86 | None; CSV recorder unusable | Not planned | 3 |
 | C5 | Declarative transport gaps | Per-peer only; no topic/QoS | A+B closed (F); C→Phase G delivered ([ADR 0013](../../docs/adr/0013-per-topic-routing.md)); D→C7 | — |
 | C6 | systemd readiness | **Closed 2026-06-03** — `Type=notify` + inline `sd_notify` ([ADR 0015](../../docs/adr/0015-systemd-readiness-notification.md)) | E2 + C6 closure | 2 |

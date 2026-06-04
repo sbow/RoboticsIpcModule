@@ -498,10 +498,18 @@ re-runs). Steps, in order:
 9. `actions/upload-artifact` on failure — uploads `build/ipc/test/`
    with 7 day retention
 
-Wall-time target is **≤ 3 min** on a standard `ubuntu-latest` runner;
-the job has a hard `timeout-minutes: 5` ceiling to surface a hang
-quickly. `concurrency: cancel-in-progress: true` short-circuits older
-runs on the same ref so fast pushes don't pile up runner minutes.
+Wall-time target is **≤ 3 min** per leg; the job has a `timeout-minutes: 8`
+ceiling to surface a hang quickly. `concurrency: cancel-in-progress: true`
+short-circuits older runs on the same ref so fast pushes don't pile up
+runner minutes.
+
+**Architecture matrix (C3).** The job is a `fail-fast: false` matrix over
+`arch: [x64, arm64]` → `ubuntu-latest` and `ubuntu-24.04-arm`. The arm64 leg
+runs the identical suite on a **native aarch64** GitHub-hosted runner (free
+for public repos; no QEMU / cross-compile), validating the Jetson-target ABI,
+64-bit atomics, endianness, and syscalls. ccache keys and failure-artifact
+names are arch-scoped so the legs don't collide. On-actual-Jetson (L4T /
+Cortex-A78AE) validation remains an out-of-band operator check.
 
 `make ci` is the local mirror — exact same stages, dispatched as
 sequenced sub-makes so a `-jN` parent doesn't fan out the test
