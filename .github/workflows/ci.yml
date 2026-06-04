@@ -72,7 +72,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install toolchain
         run: |
@@ -87,7 +87,7 @@ jobs:
       # falls through to the nearest Makefile-pinned, then OS-pinned,
       # snapshot.
       - name: ccache restore
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.ccache
           # Arch-scoped: x64 and arm64 object caches must never mix.
@@ -129,7 +129,7 @@ jobs:
       # Successful runs don't upload — keeps the artifact list tidy.
       - name: Upload build artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           # Arch-suffixed so the two matrix legs don't collide on upload.
           name: build-ipc-test-binaries-${{ matrix.arch }}
