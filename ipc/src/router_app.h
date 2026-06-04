@@ -12,9 +12,13 @@
 
 #include <cstddef>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <string_view>
 #include <unistd.h>
+
+#include <sys/socket.h>
+#include <sys/un.h>
 
 inline void install_router_stop_handlers() {
     install_app_stop_handlers();
@@ -26,6 +30,70 @@ inline bool router_stop_requested() {
 
 inline bool router_test_mode() {
     return std::getenv("ROUTER_TEST") != nullptr;
+}
+
+// C6: systemd readiness notification (sd_notify protocol), implemented
+// WITHOUT linking libsystemd to keep the module dependency-light / header-only
+// (see docs/adr/0015-systemd-readiness-notification.md and ADR 0004).
+//
+// The sd_notify(3) wire protocol is just a newline-separated datagram sent to
+// the AF_UNIX socket named by $NOTIFY_SOCKET. We send it ourselves. When the
+// router runs under a `Type=notify` unit, systemd holds dependent units gated
+// `After=rim-router.service` until it receives our `READY=1` — so peers stop
+// racing the router's first `shm_open` / `bind`.
+//
+// `state` is one sd_notify status line, e.g. "READY=1" or "STOPPING=1".
+// Returns true iff a datagram was sent. A no-op returning false when
+// $NOTIFY_SOCKET is unset (not under Type=notify, or run from a shell / test
+// harness) or empty, so callers can invoke it unconditionally. Never throws.
+inline bool router_sd_notify(const char* state) {
+    const char* socket_path = std::getenv("NOTIFY_SOCKET");
+    if (socket_path == nullptr || socket_path[0] == '\0' || state == nullptr) {
+        return false;
+    }
+
+    const std::size_t path_len = std::strlen(socket_path);
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    // Need room for the path plus, for filesystem sockets, a trailing NUL.
+    if (path_len == 0 || path_len >= sizeof(addr.sun_path)) {
+        return false;
+    }
+    std::memcpy(addr.sun_path, socket_path, path_len + 1);
+
+    socklen_t addr_len;
+    if (addr.sun_path[0] == '@') {
+        // Abstract namespace: leading '@' is the systemd spelling of a NUL
+        // first byte; the address length excludes any trailing NUL.
+        addr.sun_path[0] = '\0';
+        addr_len = static_cast<socklen_t>(
+            offsetof(sockaddr_un, sun_path) + path_len);
+    } else {
+        addr_len = static_cast<socklen_t>(
+            offsetof(sockaddr_un, sun_path) + path_len + 1);
+    }
+
+    const int fd = ::socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) {
+        return false;
+    }
+    const std::size_t state_len = std::strlen(state);
+    const ssize_t sent = ::sendto(
+        fd, state, state_len, MSG_NOSIGNAL,
+        reinterpret_cast<const sockaddr*>(&addr), addr_len);
+    ::close(fd);
+    return sent == static_cast<ssize_t>(state_len);
+}
+
+// Signal that all endpoints are bound and dependent units may start.
+inline bool router_notify_ready() {
+    return router_sd_notify("READY=1");
+}
+
+// Signal that the router is shutting down (lets systemd distinguish a clean
+// stop from a crash during the shutdown window).
+inline bool router_notify_stopping() {
+    return router_sd_notify("STOPPING=1");
 }
 
 // Phase B (B3): pluggable logger.

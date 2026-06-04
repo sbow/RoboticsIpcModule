@@ -236,6 +236,26 @@ void router_log(std::string_view line);              // INFO shorthand
 Default behaviour (no callback registered): write `<msg>\n` to
 `STDERR_FILENO` — matches the pre-Phase-B behaviour for tests and demos.
 
+### systemd readiness (C6)
+
+`router_app.h` also exposes the `sd_notify(3)` readiness protocol,
+implemented **inline (no `libsystemd`)** so the binary links nothing new —
+see [ADR 0015](../docs/adr/0015-systemd-readiness-notification.md).
+
+```cpp
+bool router_sd_notify(const char* state);  // raw status line, e.g. "READY=1"
+bool router_notify_ready();                 // "READY=1"  — call after bind
+bool router_notify_stopping();              // "STOPPING=1" — call on shutdown
+```
+
+Each writes a datagram to `$NOTIFY_SOCKET` and returns whether it was sent;
+when `$NOTIFY_SOCKET` is unset (not under a `Type=notify` unit, a shell, or a
+test harness) the call is a silent no-op returning `false`, so app code may
+invoke it unconditionally. The router demo (`router_server.cpp`) calls
+`router_notify_ready()` once from `run_forward_loop` after every transport
+link is bound, which lets `rim-router.service` run as `Type=notify` so peers
+gated `After=rim-router.service` start only once endpoints are actually up.
+
 ## Examples vs library
 
 Everything under `ipc/test/` is a **demo / integration test**, not part of the
@@ -350,6 +370,7 @@ make test-datagram-seq      # Phase D1 — SourceSeqTracker (gap detection, 2^32
 make test-routing           # Phase D1 + Phase G — route_targets_for edge cases incl. per-topic dispatch
 make test-resolver          # Phase D1 — peer_id_from_recv<Uds/Udp>
 make test-cli-args          # Phase D1 — log_path_for_role arity regression
+make test-sd-notify         # C6 — sd_notify (Type=notify readiness) wire protocol, no libsystemd
 make test-ipc-integration   # Phase D2 — all integration scenarios
 make test-slow-recorder     # Phase D2 — per-peer drop attribution under slow subscriber
 make test-burst-sensor      # Phase D2 — SourceSeqTracker accounting under burst publish

@@ -68,6 +68,9 @@ IPC_ROUTING_TEST          := $(IPC_TEST_DIR)/routing_test
 IPC_RESOLVER_TEST         := $(IPC_TEST_DIR)/resolver_test
 IPC_CLI_ARGS_TEST         := $(IPC_TEST_DIR)/cli_args_test
 
+# C6 — systemd readiness notification unit test (ADR 0015).
+IPC_SD_NOTIFY_TEST        := $(IPC_TEST_DIR)/sd_notify_test
+
 # Phase D2 integration tests.
 IPC_SLOW_RECORDER_TEST    := $(IPC_TEST_DIR)/slow_recorder_test
 IPC_BURST_SENSOR_TEST     := $(IPC_TEST_DIR)/burst_sensor_test
@@ -106,13 +109,14 @@ ALL_TARGETS := \
 	$(IPC_FAULT_INJECTION_TEST) \
 	$(IPC_TOPIC_REGISTRY_TEST) \
 	$(IPC_TOPIC_DISPATCH_TEST) \
-	$(IPC_MIXED_TRANSPORT_TEST)
+	$(IPC_MIXED_TRANSPORT_TEST) \
+	$(IPC_SD_NOTIFY_TEST)
 
 .PHONY: all clean debug help test-ipc test-ipc-shm test-router \
 	test-ipc-unit test-topology-loader test-last-value-cache \
 	test-shm-backpressure test-frame \
 	test-datagram-seq test-routing test-resolver test-cli-args \
-	test-topic-registry \
+	test-topic-registry test-sd-notify \
 	test-ipc-integration test-slow-recorder test-burst-sensor \
 	test-profile-switch test-router-restart test-fault-injection \
 	test-topic-dispatch test-mixed-transport \
@@ -190,6 +194,12 @@ $(IPC_RESOLVER_TEST): $(IPC_ROOT)/test/resolver_test.cpp \
 
 $(IPC_CLI_ARGS_TEST): $(IPC_ROOT)/test/cli_args_test.cpp \
 		$(IPC_ROOT)/test/router_cli_args.hpp | $(IPC_TEST_DIR)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(IPC_TEST_FLAGS) $(IPC_TEST_LDFLAGS) -o $@ $<
+
+# C6 — sd_notify wire-protocol test. Includes router_app.h only (no SHM, no
+# toml, no fork); binds a throwaway AF_UNIX datagram socket in /tmp.
+$(IPC_SD_NOTIFY_TEST): $(IPC_ROOT)/test/sd_notify_test.cpp \
+		$(IPC_ROUTER_HEADERS) | $(IPC_TEST_DIR)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(IPC_TEST_FLAGS) $(IPC_TEST_LDFLAGS) -o $@ $<
 
 # Phase D2 integration tests.
@@ -284,6 +294,9 @@ test-cli-args: $(IPC_CLI_ARGS_TEST)
 test-topic-registry: $(IPC_TOPIC_REGISTRY_TEST)
 	./$(IPC_TOPIC_REGISTRY_TEST)
 
+test-sd-notify: $(IPC_SD_NOTIFY_TEST)
+	./$(IPC_SD_NOTIFY_TEST)
+
 # Build-only aggregates so `make -jN` can fan out the test compiles
 # without also fanning out the test invocations themselves (some Phase D
 # scenarios bind well-known /dev/shm and /tmp/*.sock paths and would
@@ -292,7 +305,7 @@ test-topic-registry: $(IPC_TOPIC_REGISTRY_TEST)
 build-ipc-unit: $(IPC_FRAME_TEST) $(IPC_TOPOLOGY_LOADER_TEST) \
 	$(IPC_LAST_VALUE_CACHE_TEST) $(IPC_SHM_BACKPRESSURE_TEST) \
 	$(IPC_DATAGRAM_SEQ_TEST) $(IPC_ROUTING_TEST) $(IPC_RESOLVER_TEST) \
-	$(IPC_CLI_ARGS_TEST) $(IPC_TOPIC_REGISTRY_TEST)
+	$(IPC_CLI_ARGS_TEST) $(IPC_TOPIC_REGISTRY_TEST) $(IPC_SD_NOTIFY_TEST)
 
 build-ipc-integration: $(IPC_SLOW_RECORDER_TEST) $(IPC_BURST_SENSOR_TEST) \
 	$(IPC_PROFILE_SWITCH_TEST) $(IPC_ROUTER_RESTART_TEST) \
@@ -314,6 +327,7 @@ test-ipc-unit: build-ipc-unit
 	@$(MAKE) test-resolver
 	@$(MAKE) test-cli-args
 	@$(MAKE) test-topic-registry
+	@$(MAKE) test-sd-notify
 
 # Phase D2 — integration scenarios (no fork: slow_recorder, burst_sensor,
 # profile_switch; subprocess fork: router_restart, fault_injection).
@@ -416,6 +430,7 @@ help:
 	@echo "  make test-routing        build + run route_targets_for edge-case unit test only"
 	@echo "  make test-resolver       build + run UDS/UDP peer_id_from_recv unit test only"
 	@echo "  make test-cli-args       build + run log_path_for_role arity regression unit test only"
+	@echo "  make test-sd-notify      C6 — build + run sd_notify (Type=notify readiness) unit test only"
 	@echo "  make test-ipc-integration Phase D2 integration scenarios (slow recorder, burst sensor, profile switch, router restart)"
 	@echo "  make test-slow-recorder  Phase D2 — per-peer drop attribution under slow subscriber"
 	@echo "  make test-burst-sensor   Phase D2 — SourceSeqTracker accounting under burst publish"

@@ -51,6 +51,14 @@ void run_forward_loop(Server& server,
                       const RouterTopology& topo,
                       const RouteRule* rules,
                       std::size_t rule_count) {
+    // C6: every server runner above binds its endpoint(s) before calling here,
+    // so this is the single point where the router is "ready". Tell systemd so
+    // units gated `After=rim-router.service` are released only now, not at
+    // exec() time (no-op when not under Type=notify). See ADR 0015.
+    if (router_notify_ready()) {
+        router_log(ROUTER_LOG_INFO, "sd_notify READY=1 (endpoints bound)");
+    }
+
     server.run(
         rules,
         rule_count,
@@ -60,6 +68,10 @@ void run_forward_loop(Server& server,
                        router_route_line(topo, source, dest, frame));
         },
         run_options());
+
+    // The forward loop has unwound (stop requested or idle-exit). Mark the
+    // shutdown window so systemd sees a clean stop rather than a crash.
+    router_notify_stopping();
 }
 
 template<DatagramTransport Transport>

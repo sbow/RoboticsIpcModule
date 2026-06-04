@@ -163,6 +163,22 @@ journalctl -u 'rim-peer@*.service' -f
 
 Peer demos *additionally* write per-frame CSV records to `/tmp/rim_router_<role>.log` (see [router_client.cpp](../../../ipc/test/router_client.cpp) `append_record`). This is a demo artifact, not production logging — set up logrotate or systemd-tmpfiles for retention, or replace the peer binaries with your own that route logs through journald only.
 
+## Startup readiness (`Type=notify`)
+
+`rim-router.service` is `Type=notify` (C6, [ADR 0015](../../../docs/adr/0015-systemd-readiness-notification.md)). The router calls `sd_notify("READY=1")` **after** it has bound its SHM regions / UDS socket / UDP port — not at `exec()` time. systemd holds any unit gated `After=rim-router.service` + `Requires=rim-router.service` (i.e. every `rim-peer@.service` instance) until that readiness signal arrives, so peers no longer race the router's first `shm_open` / `bind`.
+
+The notify is implemented inline in `router_app.h` (`router_notify_ready()` writes the `READY=1` datagram straight to `$NOTIFY_SOCKET`) — **no `libsystemd` dependency**, nothing new on the link line. When the binary is run outside systemd (a shell, a test harness, a `Type=simple` deployment), `$NOTIFY_SOCKET` is unset and the call is a silent no-op.
+
+Verify readiness ordering on a live system:
+
+```sh
+# The router unit stays in 'activating' until READY=1, then goes 'active':
+systemctl show -p Type,NotifyAccess rim-router.service     # Type=notify
+journalctl -u rim-router.service | grep 'sd_notify READY=1'
+```
+
+Peer code should **still** retry its first connect with backoff as a backstop (defence in depth if a deployment reverts to `Type=simple`); `Restart=on-failure RestartSec=500ms` in `rim-peer@.service` is the coarse fallback.
+
 ## Cleanup behavior
 
 ### What `ExecStopPost=` removes
@@ -194,7 +210,6 @@ These are deliberately deferred from this phase — see the [post-phases robotic
 
 | Limitation | Parked review item | Workaround today |
 |---|---|---|
-| `Type=simple`, not `Type=notify` — peers gated `After=` start before SHM regions are actually bound | [C6](../../plans/post-phases-robotics-review.md#c6--systemd-readiness-signaling-sd_notify--typenotify) | Peer code should retry first connect with backoff. `Restart=on-failure RestartSec=500ms` (in the peer unit) gives a coarse fallback. |
 | Hardening directives (`MemoryLock=`, `CPUAffinity=`, `LimitRTPRIO=`) commented out by default | [C7](../../plans/post-phases-robotics-review.md#c7--real-time--production-knobs-mlockall-cpu-pinning-sched_fifo) | Uncomment + tune for your hardware. Router itself does not call `mlockall` / `sched_setscheduler` — these are user-side. |
 | No CMake / `make install` — binaries must be `install -m 0755`'d by hand | [C10](../../plans/post-phases-robotics-review.md#c10--module-consumption-model) | Step 2 of the install recipe above. |
 | `router_client` is a demo binary; real deployments substitute their own peer code | Phase F (F2–F5 sketches) | Treat the unit shape as the contract, replace `/opt/rim/bin/router_client` accordingly. |
@@ -208,3 +223,4 @@ Per [plans/E-robotics-integration.md](../../plans/E-robotics-integration.md):
 - [ ] Shutdown leaves no stale `/dev/shm/rim_*` after clean stop *(verified by ExecStopPost + `shm_leak_check.sh`)*
 - [x] `systemd-analyze verify deploy/systemd/*.service` passes
 - [x] [`ipc/MODULE.md`](../../../ipc/MODULE.md) Related documents links the reference layout *(E1)*
+- [x] `Type=notify` readiness: `router_notify_ready()` sends `READY=1` after bind (C6, ADR 0015); `sd_notify_test` covers the wire protocol *(unit test)*

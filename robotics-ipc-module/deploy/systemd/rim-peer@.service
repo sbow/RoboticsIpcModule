@@ -15,10 +15,11 @@
 Description=RoboticsIpcModule peer (%i)
 Documentation=file:///opt/rim/docs/robotics-reference-layout.md
 
-# Peer cannot start before the router has been launched. Note: After= is
-# scheduling order, not readiness -- the router may still be binding its
-# SHM regions when this unit starts (parked review C6). Peer code is
-# expected to retry its first connect with backoff.
+# Peer cannot start before the router is ready. The router unit is
+# Type=notify (C6, ADR 0015): it sends sd_notify("READY=1") only after its
+# SHM regions / sockets are bound, so `After=` + `Requires=` now gate on
+# real readiness, not just exec() time. Peer code should still retry its
+# first connect with backoff as a backstop (defence in depth).
 After=rim-router.service
 Requires=rim-router.service
 

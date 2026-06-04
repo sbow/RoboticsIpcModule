@@ -16,14 +16,24 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-# Phase E E2: Type=simple.
+# Type=notify (C6, ADR 0015).
 #
-# Peer units that gate on us with `After=rim-router.service` will be released
-# the moment this unit's ExecStart is fork()'d, NOT when the router has
-# actually bound its SHM regions / UDS socket / UDP port. Peer code must
-# retry its first connect with backoff until sd_notify("READY=1") integration
-# lands -- see post-phases-robotics-review.md C6.
-Type=simple
+# router_server sends sd_notify("READY=1") AFTER it has bound its SHM regions /
+# UDS socket / UDP port (router_app.h router_notify_ready(), invoked from
+# run_forward_loop once all endpoints are up). systemd therefore holds peer
+# units gated `After=rim-router.service` + `Requires=` until the router is
+# actually ready -- they no longer race the router's first shm_open / bind.
+#
+# The notify is implemented inline (no libsystemd dependency -- it writes the
+# READY=1 datagram to $NOTIFY_SOCKET directly), so the binary links nothing new.
+# NotifyAccess=main: only the main process may send readiness (the default; set
+# explicitly as documentation -- the router is single-process).
+#
+# Peer code should STILL retry its first connect with backoff as a backstop
+# (defence in depth if a future deployment reverts to Type=simple) -- see the
+# rim-peer@.service notes.
+Type=notify
+NotifyAccess=main
 
 # Profile selects transport (SHM / UDS / UDP) + peer addresses + per-peer
 # ring sizing. Ship one TOML per deployment under /etc/rim/ and reference

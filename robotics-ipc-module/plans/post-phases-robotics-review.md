@@ -40,7 +40,7 @@ At that point, walk each consideration, decide close / defer / scope into a new 
 
 ## Group 2 — Verify when Phase E closes (in plan but underspecified)
 
-- **C6** systemd readiness signaling — E2 names the units but does not yet specify `Type=notify` / `sd_notify`. Confirm before E2 closes.
+- **C6** systemd readiness signaling — **closed 2026-06-03** (`Type=notify` + inline `sd_notify`, no libsystemd; [ADR 0015](../../docs/adr/0015-systemd-readiness-notification.md))
 - **C8** Cross-host time sync — E4 forward-declares PTP / `CLOCK_MONOTONIC` raw. Confirm which path E4 actually lands.
 
 ## Group 3 — Not in any current plan (needs explicit decision)
@@ -239,6 +239,8 @@ The Scope A + B delivery was already enough to (i) close the F1 dashboard limita
 
 ### C6 — systemd readiness signaling (`sd_notify` / `Type=notify`)
 
+> **CLOSED — 2026-06-03 (Option 3).** Both halves shipped. `router_app.h` gained `router_sd_notify()` / `router_notify_ready()` / `router_notify_stopping()` — the `sd_notify(3)` wire protocol implemented **inline (no `libsystemd`)** to stay inside the [ADR 0004](../../docs/adr/0004-robotics-module-boundaries.md) dependency-light boundary. `router_server.cpp` calls `router_notify_ready()` from `run_forward_loop` (the single post-bind chokepoint for every transport path) and `router_notify_stopping()` after the loop unwinds. `rim-router.service` flipped `Type=simple` → `Type=notify` + `NotifyAccess=main`; `rim-peer@.service` keeps `After=`/`Requires=` (now real readiness ordering) with retry-with-backoff retained as a documented backstop. New `sd_notify_test` (15 assertions: filesystem + abstract sockets, the unset/empty no-op contract, oversized-path rejection). See [ADR 0015](../../docs/adr/0015-systemd-readiness-notification.md). The C7 hardening directives remain the other (independent) half of the production-hardening cluster.
+
 **Finding.** Zero `sd_notify` / `libsystemd` / `Type=notify` / `NotifySocket` references in the repo. The router binds and enters its forward loop without signaling readiness. Phase E E2 lists the units but does not specify the notify type.
 
 **Evidence.**
@@ -254,6 +256,8 @@ The Scope A + B delivery was already enough to (i) close the F1 dashboard limita
 1. Add `sd_notify("READY=1")` after bind in [ipc/test/router_server.cpp](../../ipc/test/router_server.cpp) — either via `<systemd/sd-daemon.h>` behind a `HAVE_LIBSYSTEMD` define, or a small inline socket-write to `$NOTIFY_SOCKET` to keep `libsystemd` out of the link line.
 2. Document the race + require peer-side retry-with-backoff on `shm_open` (already the right defensive posture either way).
 3. Both — `sd_notify` for clean startup ordering, plus document the retry as a backstop.
+
+**Decision (2026-06-03).** **Option 3, with Option 1's inline-socket variant.** Sending the `$NOTIFY_SOCKET` datagram ourselves (no `libsystemd`) keeps the link line at `-lrt -pthread` and honours [ADR 0004](../../docs/adr/0004-robotics-module-boundaries.md); peer-side retry stays documented as a backstop. See [ADR 0015](../../docs/adr/0015-systemd-readiness-notification.md) for the full rationale (including why `libsystemd` was rejected) and the `READY=1`/`STOPPING=1` subset implemented.
 
 ---
 
@@ -491,7 +495,7 @@ The Phase H foundation makes Option 1b cheaper than it was when first written: e
 | C3 | ARM / aarch64 verification | Docs only; no CI dim | Not planned | 3 |
 | C4 | Playback / sim on x86 | None; CSV recorder unusable | Not planned | 3 |
 | C5 | Declarative transport gaps | Per-peer only; no topic/QoS | A+B closed (F); C→Phase G delivered ([ADR 0013](../../docs/adr/0013-per-topic-routing.md)); D→C7 | — |
-| C6 | systemd readiness | No `sd_notify` | E2 (underspecified) | 2 |
+| C6 | systemd readiness | **Closed 2026-06-03** — `Type=notify` + inline `sd_notify` ([ADR 0015](../../docs/adr/0015-systemd-readiness-notification.md)) | E2 + C6 closure | 2 |
 | C7 | RT pinning / `mlockall` | None | Not planned | 3 |
 | C8 | Cross-host time sync | `steady_clock` relative ns | E4 (forward-decl only) | 2 |
 | C9 | Camera / GStreamer shape | Docs only | Phase F (F5) | 1 |
