@@ -1,3 +1,12 @@
+// C7 (ADR 0016) — sched_setaffinity / cpu_set_t are glibc extensions gated on
+// _GNU_SOURCE. The build uses -std=c++20 (not gnu++20), so define it here,
+// before any libc header is pulled in. router_app.h is an app-only header that
+// is always included first in the router/peer app translation units, so this
+// reaches the affinity declarations without leaking into library headers.
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE 1
+#endif
+
 #pragma once
 
 // router_app.h — app-only conveniences for router demos / bridges.
@@ -17,6 +26,8 @@
 #include <string_view>
 #include <unistd.h>
 
+#include <sched.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 
@@ -94,6 +105,34 @@ inline bool router_notify_ready() {
 // stop from a crash during the shutdown window).
 inline bool router_notify_stopping() {
     return router_sd_notify("STOPPING=1");
+}
+
+// C7 (ADR 0016) — opt-in real-time hardening hooks. Both are no-ops returning
+// false on failure (e.g. missing CAP_IPC_LOCK, an out-of-range core), never
+// throw, and are intended to be called once at startup. They are deliberately
+// NOT called automatically: a production deployment opts in (the router demo
+// reads RIM_MLOCK / RIM_CPU env vars), so the default build behaves exactly as
+// before. SCHED_FIFO is intentionally left to the systemd unit (LimitRTPRIO= +
+// a wrapper / drop-in) rather than a code hook — see ADR 0016.
+
+// Lock all current + future pages into RAM (no major page faults / swap on the
+// hot path). Wraps mlockall(MCL_CURRENT | MCL_FUTURE); needs CAP_IPC_LOCK or a
+// sufficient RLIMIT_MEMLOCK (systemd MemoryLock=infinity grants both).
+inline bool router_lock_memory() {
+    return ::mlockall(MCL_CURRENT | MCL_FUTURE) == 0;
+}
+
+// Pin the calling thread to a single CPU core (isolate the IPC hot path from
+// scheduler migration jitter; pair with an isolcpus / cpuset core). Returns
+// false for a negative core or on sched_setaffinity failure.
+inline bool router_pin_to_core(int core) {
+    if (core < 0) {
+        return false;
+    }
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    CPU_SET(core, &set);
+    return ::sched_setaffinity(0, sizeof(set), &set) == 0;
 }
 
 // Phase B (B3): pluggable logger.

@@ -210,7 +210,7 @@ These are deliberately deferred from this phase — see the [post-phases robotic
 
 | Limitation | Parked review item | Workaround today |
 |---|---|---|
-| Hardening directives (`MemoryLock=`, `CPUAffinity=`, `LimitRTPRIO=`) commented out by default | [C7](../../plans/post-phases-robotics-review.md#c7--real-time--production-knobs-mlockall-cpu-pinning-sched_fifo) | Uncomment + tune for your hardware. Router itself does not call `mlockall` / `sched_setscheduler` — these are user-side. |
+| Hardening directives (`MemoryLock=`, `CPUAffinity=`, `LimitRTPRIO=`) commented out by default | [C7](../../plans/post-phases-robotics-review.md#c7--real-time--production-knobs-mlockall-cpu-pinning-sched_fifo-priority-aware-qos) (closed — [ADR 0016](../../../docs/adr/0016-rt-hardening-and-priority-qos.md)) | Uncomment + tune. The router can also `mlockall` / pin itself via `RIM_MLOCK` / `RIM_CPU`, and shed low-priority frames under backpressure via `RIM_PRIORITY_DROP_FLOOR`. `SCHED_FIFO` stays a systemd/wrapper concern (`LimitRTPRIO=`). |
 | No CMake / `make install` — binaries must be `install -m 0755`'d by hand | [C10](../../plans/post-phases-robotics-review.md#c10--module-consumption-model) | Step 2 of the install recipe above. |
 | `router_client` is a demo binary; real deployments substitute their own peer code | Phase F (F2–F5 sketches) | Treat the unit shape as the contract, replace `/opt/rim/bin/router_client` accordingly. |
 | Sideband SHM region naming (`rim_vision_nv12`, `rim_ml_tensor_in`, etc.) is forward-declared but not produced by any peer in this tree | Phase F F5 | Cleanup script proactively `rm -f`'s the anticipated names so the future deployment is clean from day one. |

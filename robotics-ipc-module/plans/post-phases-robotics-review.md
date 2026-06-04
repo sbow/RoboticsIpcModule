@@ -48,7 +48,7 @@ At that point, walk each consideration, decide close / defer / scope into a new 
 - **C3** ARM / aarch64 verification
 - **C4** Playback / simulation testing on x86
 - **C5** Declarative transport gaps — Scopes A + B closed 2026-05-28; Scope C promoted to [Phase G](G-declarative-routing.md) 2026-05-30; Scope D merged into C7 below
-- **C7** Real-time / production knobs (`mlockall`, CPU pinning, SCHED_FIFO) — now also covers priority-aware QoS (former C5 Scope D)
+- **C7** Real-time / production knobs (`mlockall`, CPU pinning, SCHED_FIFO) + priority-aware QoS — **closed 2026-06-03** (opt-in RT hooks + drop-lowest-first SHM QoS; [ADR 0016](../../docs/adr/0016-rt-hardening-and-priority-qos.md))
 - **C10** Module consumption model (`make install` / CMake export vs. vendor-as-submodule)
 - **C11** Mixed-transport networks — **closed 2026-06-02** (single-host delivered as [Phase H](H-mixed-transport-router.md) / [ADR 0014](../../docs/adr/0014-mixed-transport-router.md); cross-host split to C12)
 - **C12** Cross-host router federation — stitch per-host single-host routers (each already mixed-transport after Phase H) into one logical fabric across machines (split out of C11 on closure)
@@ -263,6 +263,8 @@ The Scope A + B delivery was already enough to (i) close the F1 dashboard limita
 
 ### C7 — Real-time / production knobs (`mlockall`, CPU pinning, SCHED_FIFO, priority-aware QoS)
 
+> **CLOSED — 2026-06-03 (Options 1 + 4).** Production-hardening cluster, second item (after [C6](#c6--systemd-readiness-signaling-sd_notify--typenotify)). **RT knobs:** opt-in `router_lock_memory()` (`mlockall`) + `router_pin_to_core()` (`sched_setaffinity`) hooks in `router_app.h` — env-gated in the demo (`RIM_MLOCK`, `RIM_CPU`), off by default, no new link deps (`_GNU_SOURCE` handled in-header). **`SCHED_FIFO` is intentionally left to systemd** (`LimitRTPRIO=` + wrapper), not a code hook — see ADR 0016. The `rim-router.service` hardening block now documents both the systemd directives and the `RIM_*` env vars. **Priority-aware QoS (former C5 Scope D):** `ShmRouterLink::set_priority_drop_floor` implements **drop-lowest-first as admission control under congestion** (SPSC-safe — sheds sub-floor frames before touching a congested ring rather than evicting; floor 0 = disabled = legacy behavior), plus always-on `ShmRouterMetrics::dropped_by_priority[8]` attribution; exposed via `RIM_PRIORITY_DROP_FLOOR`. Datagram links are unchanged (no router-owned bounded queue to shed against — documented). New tests: `shm_backpressure_test` +3 (per-priority sum, floor reserves slot for high-priority, no-floor legacy control) and `rt_hardening_test` (hook no-throw + input validation). See [ADR 0016](../../docs/adr/0016-rt-hardening-and-priority-qos.md).
+
 > **Scope absorbed 2026-05-30.** This entry was extended to cover priority-aware QoS (formerly C5 Scope D). See §Options 4 below for the merged sub-scope and the reasoning.
 
 **Finding.** Zero hits for `mlockall`, `sched_setaffinity`, `SCHED_FIFO`, `LimitRTPRIO`, `MemoryLock`, `CPUAffinity`, `Nice=`, `pthread_setaffinity_np`. The Phase E plan does not list these as targets. The 3-bit `priority` field in `RouterFrame::flags` (ADR 0008) is also today purely advisory — `ShmRouterLink::forward` and `DatagramRouterLink::forward` never inspect it.
@@ -285,6 +287,8 @@ The Scope A + B delivery was already enough to (i) close the F1 dashboard limita
    - **Shared hot path.** Both edits land in `forward()` on both link types. Splitting them across two phases would touch the same code twice.
    - **Shared systemd surface.** A production unit that wants priority-aware QoS also wants `MemoryLock=infinity` + `CPUAffinity` + `LimitRTPRIO=80` — they are configured at the same level and tested with the same load generators.
    - **Shared failure signature.** Both manifest as p99 latency drift under load, not as a config-shape problem. The Phase G boundary (config-shape work) explicitly excludes this — see [G-declarative-routing.md §Out of scope](G-declarative-routing.md#out-of-scope-still-parked-or-moved-elsewhere).
+
+**Decision (2026-06-03).** **Options 1 + 4.** RT placement shipped as opt-in code hooks (`mlockall` + CPU pin via `RIM_MLOCK` / `RIM_CPU`) plus the documented systemd directives; `SCHED_FIFO` stays a systemd/wrapper concern, not a code hook. Priority-aware QoS shipped as **drop-lowest-first admission control** on the SHM link (`set_priority_drop_floor`, `RIM_PRIORITY_DROP_FLOOR`) with per-priority drop attribution; the multi-queue drain (Option-A-equivalent) was rejected as too heavy for the goal. Datagram QoS is out of scope (no router-owned queue). Full rationale + rejected alternatives in [ADR 0016](../../docs/adr/0016-rt-hardening-and-priority-qos.md).
 
 ---
 
@@ -496,7 +500,7 @@ The Phase H foundation makes Option 1b cheaper than it was when first written: e
 | C4 | Playback / sim on x86 | None; CSV recorder unusable | Not planned | 3 |
 | C5 | Declarative transport gaps | Per-peer only; no topic/QoS | A+B closed (F); C→Phase G delivered ([ADR 0013](../../docs/adr/0013-per-topic-routing.md)); D→C7 | — |
 | C6 | systemd readiness | **Closed 2026-06-03** — `Type=notify` + inline `sd_notify` ([ADR 0015](../../docs/adr/0015-systemd-readiness-notification.md)) | E2 + C6 closure | 2 |
-| C7 | RT pinning / `mlockall` | None | Not planned | 3 |
+| C7 | RT pinning / `mlockall` + priority QoS | **Closed 2026-06-03** — opt-in RT hooks + drop-lowest-first SHM QoS ([ADR 0016](../../docs/adr/0016-rt-hardening-and-priority-qos.md)) | C7 closure | 3 |
 | C8 | Cross-host time sync | `steady_clock` relative ns | E4 (forward-decl only) | 2 |
 | C9 | Camera / GStreamer shape | Docs only | Phase F (F5) | 1 |
 | C10 | Module consumption model | Implicit submodule pattern | Not planned | 3 |

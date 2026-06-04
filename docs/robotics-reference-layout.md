@@ -29,7 +29,7 @@ This is a **deployment-shape document**. It documents the contract surface (peer
 | Python / Node / MAVLink bridge code | Phase F F2–F4 |
 | Vision peer + camera capture code | Phase F F5 |
 | Sideband `memory_class` (CUDA / NvBufSurface) parsing | Phase F (forward-declared in [ADR 0008](adr/0008-router-frame-v2.md)) |
-| TensorRT contract beyond peer-catalog level, replay/sim peer, declarative-transport extensions (per-topic routes — **delivered as [Phase G](../robotics-ipc-module/plans/G-declarative-routing.md)**; priority-aware QoS — merged into C7), mixed-transport networks (SHM + UDS + UDP from one router — single-host **delivered as [Phase H](../robotics-ipc-module/plans/H-mixed-transport-router.md)**; cross-host parked), RT pinning / `mlockall`, aarch64 CI dimension, `make install` / CMake export | Open backlog — see [plans/post-phases-robotics-review.md](../robotics-ipc-module/plans/post-phases-robotics-review.md) (considerations C1–C11; C5 Scopes A + B closed 2026-05-28; C5 Scope C promoted to [Phase G](../robotics-ipc-module/plans/G-declarative-routing.md) — **delivered 2026-06-01, [ADR 0013](adr/0013-per-topic-routing.md)**; C11 single-host promoted to [Phase H](../robotics-ipc-module/plans/H-mixed-transport-router.md) — **delivered 2026-06-02, [ADR 0014](adr/0014-mixed-transport-router.md)**; Scope D merged into C7 on 2026-05-30) |
+| TensorRT contract beyond peer-catalog level, replay/sim peer, declarative-transport extensions (per-topic routes — **delivered as [Phase G](../robotics-ipc-module/plans/G-declarative-routing.md)**; priority-aware QoS — merged into C7, **delivered 2026-06-03, [ADR 0016](adr/0016-rt-hardening-and-priority-qos.md)**), mixed-transport networks (SHM + UDS + UDP from one router — single-host **delivered as [Phase H](../robotics-ipc-module/plans/H-mixed-transport-router.md)**; cross-host parked), RT pinning / `mlockall` (**delivered as C7 opt-in hooks, [ADR 0016](adr/0016-rt-hardening-and-priority-qos.md)**), aarch64 CI dimension, `make install` / CMake export | Open backlog — see [plans/post-phases-robotics-review.md](../robotics-ipc-module/plans/post-phases-robotics-review.md) (considerations C1–C11; C5 Scopes A + B closed 2026-05-28; C5 Scope C promoted to [Phase G](../robotics-ipc-module/plans/G-declarative-routing.md) — **delivered 2026-06-01, [ADR 0013](adr/0013-per-topic-routing.md)**; C11 single-host promoted to [Phase H](../robotics-ipc-module/plans/H-mixed-transport-router.md) — **delivered 2026-06-02, [ADR 0014](adr/0014-mixed-transport-router.md)**; Scope D merged into C7 on 2026-05-30) |
 
 ## Peer catalog
 
@@ -110,11 +110,12 @@ flowchart LR
 | `ml_inference` (Phase F) | systemd unit | Reads `/dev/shm/rim_ml_tensor_in`, writes `/dev/shm/rim_ml_tensor_out`; CUDA / TensorRT engine is the **user's** code, not the module's |
 | `mavlink_gateway` (Phase F) | systemd unit; needs `/dev/ttyUSB*` device access | Parses MAVLink, publishes compact status to router |
 
-**Operational knobs.** None of the following are enabled by default; they belong in the user's systemd unit:
+**Operational knobs.** None of the following are enabled by default (C7, [ADR 0016](adr/0016-rt-hardening-and-priority-qos.md)); enable per deployment:
 
-- `MemoryLock=infinity` — pin pages to avoid faults under load (recommended; see [parked review C7](../robotics-ipc-module/plans/post-phases-robotics-review.md#c7--real-time--production-knobs-mlockall-cpu-pinning-sched_fifo))
-- `CPUAffinity=` — pin router to an isolated core
-- `LimitRTPRIO=80` — enable `SCHED_FIFO` from inside the router (router does not call `sched_setscheduler` today; this is a knob for user code wrapping the router)
+- `MemoryLock=infinity` — pin pages to avoid faults under load. The router can also `mlockall` itself when `RIM_MLOCK` is set (`router_lock_memory()`).
+- `CPUAffinity=` — pin router to an isolated core. In-process equivalent: `RIM_CPU=<n>` (`router_pin_to_core()`).
+- `LimitRTPRIO=80` — allow `SCHED_FIFO`. The router does **not** call `sched_setscheduler` itself (deliberately left to a systemd/exec wrapper — ADR 0016).
+- `RIM_PRIORITY_DROP_FLOOR=<0..7>` — SHM priority-aware QoS: under backpressure, shed frames whose 3-bit priority is below the floor first (drop-lowest-first), reserving ring bandwidth for high-priority traffic. Off by default.
 
 **Cleanup.** SHM regions persist across router crashes by design (router unlinks-then-creates on next start). Manual cleanup recipe in [scripts/README.md](../robotics-ipc-module/scripts/README.md). The [`shm_leak_check.sh`](../robotics-ipc-module/scripts/shm_leak_check.sh) gate verifies test suites leave no leftover `/dev/shm/rim_*` or `/tmp/rim_*.sock`.
 

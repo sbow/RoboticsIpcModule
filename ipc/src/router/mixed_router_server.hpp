@@ -169,6 +169,13 @@ public:
     bool has_uds() const noexcept { return has_uds_; }
     bool has_udp() const noexcept { return has_udp_; }
 
+    // C7 (ADR 0016) — priority-aware drop-lowest-first applies to the SHM link
+    // only (datagram egress has no router-owned bounded queue to shed against).
+    // No-op when the topology has no SHM peers.
+    void set_priority_drop_floor(uint8_t floor) {
+        if (shm_) shm_->set_priority_drop_floor(floor);
+    }
+
 private:
     template<typename Link, typename OnForward>
     bool poll_link(

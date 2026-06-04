@@ -256,6 +256,29 @@ invoke it unconditionally. The router demo (`router_server.cpp`) calls
 link is bound, which lets `rim-router.service` run as `Type=notify` so peers
 gated `After=rim-router.service` start only once endpoints are actually up.
 
+### Real-time hardening + priority QoS (C7)
+
+`router_app.h` exposes two **opt-in** init hooks (no new link deps; see
+[ADR 0016](../docs/adr/0016-rt-hardening-and-priority-qos.md)):
+
+```cpp
+bool router_lock_memory();          // mlockall(MCL_CURRENT | MCL_FUTURE)
+bool router_pin_to_core(int core);  // sched_setaffinity to {core}
+```
+
+Both return `false` on failure and never throw. They are **not** called by
+default — the `router_server` demo invokes them only when `RIM_MLOCK` /
+`RIM_CPU` are set. `SCHED_FIFO` is left to the systemd unit (`LimitRTPRIO=` +
+wrapper), not a code hook.
+
+Priority-aware QoS lives on the SHM link: `ShmRouterLink::set_priority_drop_floor(floor)`
+(default `0` = disabled) sheds frames whose 3-bit `priority` is below `floor`
+while a destination ring is congested — **drop-lowest-first admission control**,
+reserving freed slots for high-priority traffic without evicting (SPSC-safe).
+`ShmRouterMetrics::dropped_by_priority[8]` always attributes drops by priority.
+The demo wires it via `RIM_PRIORITY_DROP_FLOOR=<0..7>`; datagram links have no
+router-owned queue and are unaffected.
+
 ## Examples vs library
 
 Everything under `ipc/test/` is a **demo / integration test**, not part of the
@@ -371,6 +394,8 @@ make test-routing           # Phase D1 + Phase G — route_targets_for edge case
 make test-resolver          # Phase D1 — peer_id_from_recv<Uds/Udp>
 make test-cli-args          # Phase D1 — log_path_for_role arity regression
 make test-sd-notify         # C6 — sd_notify (Type=notify readiness) wire protocol, no libsystemd
+make test-rt-hardening      # C7 — mlockall / CPU-pin hook smoke (no-throw + input validation)
+make test-shm-backpressure  # Phase C drop-on-full + C7 priority-aware drop-lowest-first QoS
 make test-ipc-integration   # Phase D2 — all integration scenarios
 make test-slow-recorder     # Phase D2 — per-peer drop attribution under slow subscriber
 make test-burst-sensor      # Phase D2 — SourceSeqTracker accounting under burst publish

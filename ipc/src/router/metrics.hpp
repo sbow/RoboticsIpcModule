@@ -45,6 +45,15 @@ constexpr std::size_t kPerPeerMetricsSlots = 256;  // peer id is uint8_t (0..255
 //                           frame available; increments on each empty poll.
 //   recv_truncated        — peer published a buffer smaller than
 //                           kRouterFrameSize; frame discarded.
+//   dropped_by_priority   — C7 (ADR 0016): parallel breakdown of dropped_full
+//                           bucketed by the dropped frame's 3-bit priority
+//                           (0..7, index = priority). Always maintained (free
+//                           observability) so operators can see which priority
+//                           classes are being shed under backpressure, and
+//                           whether the drop-lowest-first floor is working.
+//                           dropped_full stays the aggregate across buckets.
+constexpr std::size_t kPriorityLevels = 8;  // 3-bit priority field (ADR 0008)
+
 struct ShmRouterMetrics {
     std::atomic<uint64_t> forwarded{0};
     std::atomic<uint64_t> dropped_full{0};
@@ -56,6 +65,10 @@ struct ShmRouterMetrics {
     // and non-copyable; std::array<std::atomic<T>, N> is value-initialized to
     // zero counters and stays in place for the life of the link.
     std::array<std::atomic<uint64_t>, kPerPeerMetricsSlots> dropped_full_per_peer{};
+
+    // C7 — per-priority drop attribution (ADR 0016). Indexed by the 3-bit
+    // priority of the frame that was dropped on a full ring.
+    std::array<std::atomic<uint64_t>, kPriorityLevels> dropped_by_priority{};
 };
 
 // Phase D4 — datagram (UDP / UDS) router link metrics.

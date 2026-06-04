@@ -71,6 +71,9 @@ IPC_CLI_ARGS_TEST         := $(IPC_TEST_DIR)/cli_args_test
 # C6 — systemd readiness notification unit test (ADR 0015).
 IPC_SD_NOTIFY_TEST        := $(IPC_TEST_DIR)/sd_notify_test
 
+# C7 — real-time hardening hook smoke test (ADR 0016).
+IPC_RT_HARDENING_TEST     := $(IPC_TEST_DIR)/rt_hardening_test
+
 # Phase D2 integration tests.
 IPC_SLOW_RECORDER_TEST    := $(IPC_TEST_DIR)/slow_recorder_test
 IPC_BURST_SENSOR_TEST     := $(IPC_TEST_DIR)/burst_sensor_test
@@ -110,13 +113,14 @@ ALL_TARGETS := \
 	$(IPC_TOPIC_REGISTRY_TEST) \
 	$(IPC_TOPIC_DISPATCH_TEST) \
 	$(IPC_MIXED_TRANSPORT_TEST) \
-	$(IPC_SD_NOTIFY_TEST)
+	$(IPC_SD_NOTIFY_TEST) \
+	$(IPC_RT_HARDENING_TEST)
 
 .PHONY: all clean debug help test-ipc test-ipc-shm test-router \
 	test-ipc-unit test-topology-loader test-last-value-cache \
 	test-shm-backpressure test-frame \
 	test-datagram-seq test-routing test-resolver test-cli-args \
-	test-topic-registry test-sd-notify \
+	test-topic-registry test-sd-notify test-rt-hardening \
 	test-ipc-integration test-slow-recorder test-burst-sensor \
 	test-profile-switch test-router-restart test-fault-injection \
 	test-topic-dispatch test-mixed-transport \
@@ -199,6 +203,11 @@ $(IPC_CLI_ARGS_TEST): $(IPC_ROOT)/test/cli_args_test.cpp \
 # C6 — sd_notify wire-protocol test. Includes router_app.h only (no SHM, no
 # toml, no fork); binds a throwaway AF_UNIX datagram socket in /tmp.
 $(IPC_SD_NOTIFY_TEST): $(IPC_ROOT)/test/sd_notify_test.cpp \
+		$(IPC_ROUTER_HEADERS) | $(IPC_TEST_DIR)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(IPC_TEST_FLAGS) $(IPC_TEST_LDFLAGS) -o $@ $<
+
+# C7 — RT hardening hook smoke test. router_app.h only (no SHM, no fork).
+$(IPC_RT_HARDENING_TEST): $(IPC_ROOT)/test/rt_hardening_test.cpp \
 		$(IPC_ROUTER_HEADERS) | $(IPC_TEST_DIR)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(IPC_TEST_FLAGS) $(IPC_TEST_LDFLAGS) -o $@ $<
 
@@ -297,6 +306,9 @@ test-topic-registry: $(IPC_TOPIC_REGISTRY_TEST)
 test-sd-notify: $(IPC_SD_NOTIFY_TEST)
 	./$(IPC_SD_NOTIFY_TEST)
 
+test-rt-hardening: $(IPC_RT_HARDENING_TEST)
+	./$(IPC_RT_HARDENING_TEST)
+
 # Build-only aggregates so `make -jN` can fan out the test compiles
 # without also fanning out the test invocations themselves (some Phase D
 # scenarios bind well-known /dev/shm and /tmp/*.sock paths and would
@@ -305,7 +317,8 @@ test-sd-notify: $(IPC_SD_NOTIFY_TEST)
 build-ipc-unit: $(IPC_FRAME_TEST) $(IPC_TOPOLOGY_LOADER_TEST) \
 	$(IPC_LAST_VALUE_CACHE_TEST) $(IPC_SHM_BACKPRESSURE_TEST) \
 	$(IPC_DATAGRAM_SEQ_TEST) $(IPC_ROUTING_TEST) $(IPC_RESOLVER_TEST) \
-	$(IPC_CLI_ARGS_TEST) $(IPC_TOPIC_REGISTRY_TEST) $(IPC_SD_NOTIFY_TEST)
+	$(IPC_CLI_ARGS_TEST) $(IPC_TOPIC_REGISTRY_TEST) $(IPC_SD_NOTIFY_TEST) \
+	$(IPC_RT_HARDENING_TEST)
 
 build-ipc-integration: $(IPC_SLOW_RECORDER_TEST) $(IPC_BURST_SENSOR_TEST) \
 	$(IPC_PROFILE_SWITCH_TEST) $(IPC_ROUTER_RESTART_TEST) \
@@ -328,6 +341,7 @@ test-ipc-unit: build-ipc-unit
 	@$(MAKE) test-cli-args
 	@$(MAKE) test-topic-registry
 	@$(MAKE) test-sd-notify
+	@$(MAKE) test-rt-hardening
 
 # Phase D2 — integration scenarios (no fork: slow_recorder, burst_sensor,
 # profile_switch; subprocess fork: router_restart, fault_injection).
@@ -431,6 +445,7 @@ help:
 	@echo "  make test-resolver       build + run UDS/UDP peer_id_from_recv unit test only"
 	@echo "  make test-cli-args       build + run log_path_for_role arity regression unit test only"
 	@echo "  make test-sd-notify      C6 — build + run sd_notify (Type=notify readiness) unit test only"
+	@echo "  make test-rt-hardening   C7 — build + run mlockall / CPU-pin hook smoke test only"
 	@echo "  make test-ipc-integration Phase D2 integration scenarios (slow recorder, burst sensor, profile switch, router restart)"
 	@echo "  make test-slow-recorder  Phase D2 — per-peer drop attribution under slow subscriber"
 	@echo "  make test-burst-sensor   Phase D2 — SourceSeqTracker accounting under burst publish"

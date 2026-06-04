@@ -6,6 +6,7 @@
 #include "router/topology_loader.hpp"
 #include "router_protocol.hpp"
 
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <string>
@@ -44,6 +45,45 @@ RouterRunOptions run_options() {
         opts.idle_exit_ms = 1500;
     }
     return opts;
+}
+
+// C7 (ADR 0016) — opt-in production hardening, driven by environment so the
+// default build is unchanged. A systemd unit sets these alongside
+// MemoryLock=infinity / CPUAffinity= (see rim-router.service).
+//   RIM_MLOCK (set, any value) → mlockall(MCL_CURRENT|MCL_FUTURE)
+//   RIM_CPU=<n>                → pin the router thread to core n
+void apply_rt_hardening() {
+    if (std::getenv("RIM_MLOCK") != nullptr) {
+        if (router_lock_memory()) {
+            router_log(ROUTER_LOG_INFO, "mlockall: locked current + future pages");
+        } else {
+            router_log(ROUTER_LOG_WARN,
+                       "mlockall failed (need CAP_IPC_LOCK / MemoryLock=infinity?)");
+        }
+    }
+    if (const char* cpu = std::getenv("RIM_CPU")) {
+        const int core = std::atoi(cpu);
+        if (router_pin_to_core(core)) {
+            router_log(ROUTER_LOG_INFO,
+                       std::string("pinned to core ") + std::to_string(core));
+        } else {
+            router_log(ROUTER_LOG_WARN,
+                       std::string("pin to core ") + cpu + " failed");
+        }
+    }
+}
+
+// C7 — priority-aware drop-lowest-first floor (SHM links only). 0 = disabled.
+// RIM_PRIORITY_DROP_FLOOR=<0..7>.
+uint8_t priority_drop_floor_from_env() {
+    const char* v = std::getenv("RIM_PRIORITY_DROP_FLOOR");
+    if (v == nullptr) {
+        return 0;
+    }
+    const int floor = std::atoi(v);
+    if (floor <= 0) return 0;
+    if (floor > 7) return 7;
+    return static_cast<uint8_t>(floor);
 }
 
 template<typename Server>
@@ -91,6 +131,12 @@ void run_shm_router(const RouterTopology& topo,
                     std::size_t rule_count) {
     auto server = make_shm_router_server(topo);
     bind_shm_router_listen(server, topo);
+    if (const uint8_t floor = priority_drop_floor_from_env()) {
+        server.link().set_priority_drop_floor(floor);
+        router_log(ROUTER_LOG_INFO,
+                   std::string("priority drop floor = ")
+                   + std::to_string(floor) + " (drop-lowest-first on backpressure)");
+    }
     router_log(ROUTER_LOG_INFO, "SHM router on shared-memory rings");
     run_forward_loop(server, topo, rules, rule_count);
 }
@@ -106,6 +152,12 @@ void run_mixed_router(const RouterTopology& topo,
         ::unlink(topo.listen_uds.u.uds_path);
     }
     server.bind_router();
+    if (const uint8_t floor = priority_drop_floor_from_env()) {
+        server.set_priority_drop_floor(floor);  // SHM link only; no-op otherwise
+        router_log(ROUTER_LOG_INFO,
+                   std::string("priority drop floor = ")
+                   + std::to_string(floor) + " (drop-lowest-first on backpressure)");
+    }
     std::string kinds;
     if (server.has_shm()) kinds += "SHM ";
     if (server.has_uds()) kinds += "UDS ";
@@ -204,6 +256,7 @@ struct ServerRunner {
 int main(int argc, char* argv[]) {
     install_router_stop_handlers();
     router_set_log_fn(demo_stderr_logger);
+    apply_rt_hardening();  // C7 — opt-in mlock / CPU pin (env-gated, no-op by default)
 
     if (argc < 2) {
         usage(argv[0]);

@@ -94,6 +94,36 @@ bool try_publish_frame_as_peer_a(IpcEndpoint<ShmSpsc>& peer_a_client,
     return peer_a_client.try_send(params, frame.read_only()) == ShmSendResult::Ok;
 }
 
+// C7 — publish one frame carrying a 3-bit priority in its flags byte.
+bool try_publish_with_priority(IpcEndpoint<ShmSpsc>& peer_a_client,
+                               uint8_t source_id,
+                               uint8_t priority,
+                               const std::string& payload) {
+    RouterFrame frame;
+    frame.init(source_id);
+    frame.set_flags(static_cast<uint8_t>(priority << kFlagPriorityShift));
+    frame.set_payload(payload);
+    ShmSpsc::SendParams params{.payload = frame.read_only()};
+    return peer_a_client.try_send(params, frame.read_only()) == ShmSendResult::Ok;
+}
+
+// C7 — forward A->B until B's ring saturates (first dropped_full). Leaves the
+// link congested toward B. fake clock advances per forward.
+void saturate_b(ShmRouterLink& link, IpcEndpoint<ShmSpsc>& peer_a_client) {
+    RouterFrame scratch;
+    const auto deadline = std::chrono::steady_clock::now()
+        + std::chrono::seconds(2);
+    while (link.metrics().dropped_full.load() == 0) {
+        if (std::chrono::steady_clock::now() > deadline) {
+            std::cerr << "saturate_b: deadline exceeded (no drop?)\n";
+            ++assertions_failed;
+            return;
+        }
+        try_publish_with_priority(peer_a_client, 1, 0, "fill");
+        link.forward(scratch, fake_now_ns(), kRules, std::size(kRules));
+    }
+}
+
 void test_normal_forward_increments_metric() {
     cleanup_shm();
 
@@ -322,6 +352,123 @@ void test_per_peer_attribution_isolates_slow_destination() {
     cleanup_shm3();
 }
 
+// C7 (ADR 0016) — per-priority drop attribution is always on (floor disabled).
+// Under mixed-priority load against an undrained ring, dropped_by_priority must
+// bucket every drop by the frame's priority and sum to the dropped_full total.
+void test_per_priority_drop_counters_sum_to_aggregate() {
+    cleanup_shm();
+    auto link = ShmRouterLink::server(kTopo);  // floor defaults to 0 (disabled)
+    link.bind_router({});
+    EXPECT_EQ(link.priority_drop_floor(), static_cast<uint8_t>(0));
+
+    IpcEndpoint<ShmSpsc> peer_a_client;
+    peer_a_client.bind(ShmSpsc::BindParams{.name = kPeerAShm, .create = false});
+    // B intentionally not bound → B's ring saturates and drops accumulate.
+
+    const ShmRouterMetrics& m = link.metrics();
+    RouterFrame scratch;
+    const auto deadline = std::chrono::steady_clock::now()
+        + std::chrono::seconds(2);
+    for (int i = 0; i < 1024; ++i) {
+        if (std::chrono::steady_clock::now() > deadline) {
+            std::cerr << "per-priority sum test: deadline exceeded\n";
+            ++assertions_failed;
+            break;
+        }
+        try_publish_with_priority(peer_a_client, 1,
+                                  static_cast<uint8_t>(i % kPriorityLevels), "p");
+        link.forward(scratch, fake_now_ns(), kRules, std::size(kRules));
+    }
+
+    uint64_t bucket_sum = 0;
+    int nonzero_buckets = 0;
+    for (std::size_t p = 0; p < kPriorityLevels; ++p) {
+        const uint64_t b = m.dropped_by_priority[p].load();
+        bucket_sum += b;
+        if (b > 0) ++nonzero_buckets;
+    }
+    EXPECT(m.dropped_full.load() > 0);
+    EXPECT_EQ(bucket_sum, m.dropped_full.load());
+    EXPECT(nonzero_buckets >= 2);  // drops spanned multiple priority classes
+
+    std::cout << "  per-priority drops: total=" << m.dropped_full.load()
+              << " buckets_nonzero=" << nonzero_buckets << '\n';
+    cleanup_shm();
+}
+
+// C7 — with a priority floor, a slot freed under congestion is reserved for a
+// high-priority frame: a sub-floor frame is shed (not admitted) so it cannot
+// consume the slot ahead of the high-priority frame behind it.
+void test_priority_floor_reserves_slot_for_high_priority() {
+    cleanup_shm();
+    auto link = ShmRouterLink::server(kTopo);
+    link.bind_router({});
+    link.set_priority_drop_floor(4);
+    EXPECT_EQ(link.priority_drop_floor(), static_cast<uint8_t>(4));
+
+    IpcEndpoint<ShmSpsc> peer_a_client;
+    peer_a_client.bind(ShmSpsc::BindParams{.name = kPeerAShm, .create = false});
+    IpcEndpoint<ShmSpsc> peer_b_client;
+    peer_b_client.bind(ShmSpsc::BindParams{.name = kPeerBShm, .create = false});
+
+    saturate_b(link, peer_a_client);
+    const ShmRouterMetrics& m = link.metrics();
+    const uint64_t fwd0 = m.forwarded.load();
+
+    // Free exactly one slot in B's ring.
+    char storage[1024];
+    Buffer drain = Buffer::writable(storage, sizeof(storage));
+    ShmSpsc::RecvResult rr{};
+    EXPECT(ShmSpsc::try_recv(peer_b_client.handle(), drain, rr));
+
+    RouterFrame scratch;
+    // Low-priority (1 < floor 4) while congested → shed, slot preserved.
+    try_publish_with_priority(peer_a_client, 1, 1, "low");
+    link.forward(scratch, fake_now_ns(), kRules, std::size(kRules));
+    EXPECT_EQ(m.forwarded.load(), fwd0);              // low did NOT take the slot
+    EXPECT(m.dropped_by_priority[1].load() > 0);
+
+    // High-priority (5 >= floor) → claims the reserved slot.
+    try_publish_with_priority(peer_a_client, 1, 5, "high");
+    link.forward(scratch, fake_now_ns(), kRules, std::size(kRules));
+    EXPECT_EQ(m.forwarded.load(), fwd0 + 1);          // high consumed the slot
+
+    std::cout << "  priority floor: low shed, high admitted (fwd "
+              << fwd0 << " -> " << m.forwarded.load() << ")\n";
+    cleanup_shm();
+}
+
+// C7 control — with the floor disabled (default), the same freed slot is taken
+// by whichever frame arrives first regardless of priority (legacy behavior).
+void test_no_floor_low_priority_takes_freed_slot() {
+    cleanup_shm();
+    auto link = ShmRouterLink::server(kTopo);  // floor = 0
+    link.bind_router({});
+
+    IpcEndpoint<ShmSpsc> peer_a_client;
+    peer_a_client.bind(ShmSpsc::BindParams{.name = kPeerAShm, .create = false});
+    IpcEndpoint<ShmSpsc> peer_b_client;
+    peer_b_client.bind(ShmSpsc::BindParams{.name = kPeerBShm, .create = false});
+
+    saturate_b(link, peer_a_client);
+    const ShmRouterMetrics& m = link.metrics();
+    const uint64_t fwd0 = m.forwarded.load();
+
+    char storage[1024];
+    Buffer drain = Buffer::writable(storage, sizeof(storage));
+    ShmSpsc::RecvResult rr{};
+    EXPECT(ShmSpsc::try_recv(peer_b_client.handle(), drain, rr));
+
+    RouterFrame scratch;
+    // Low-priority frame takes the freed slot because no floor is set.
+    try_publish_with_priority(peer_a_client, 1, 1, "low");
+    link.forward(scratch, fake_now_ns(), kRules, std::size(kRules));
+    EXPECT_EQ(m.forwarded.load(), fwd0 + 1);
+
+    std::cout << "  no floor: low priority took freed slot (legacy)\n";
+    cleanup_shm();
+}
+
 }  // namespace
 
 int main() {
@@ -329,6 +476,9 @@ int main() {
     test_empty_forward_increments_recv_empty();
     test_full_ring_drops_and_no_spin();
     test_per_peer_attribution_isolates_slow_destination();
+    test_per_priority_drop_counters_sum_to_aggregate();
+    test_priority_floor_reserves_slot_for_high_priority();
+    test_no_floor_low_priority_takes_freed_slot();
 
     std::cout << "shm_backpressure_test: " << (assertions_run - assertions_failed)
               << '/' << assertions_run << " assertions passed\n";

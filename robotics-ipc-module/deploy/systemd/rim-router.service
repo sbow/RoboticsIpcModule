@@ -56,16 +56,26 @@ ExecStopPost=/opt/rim/libexec/rim-router-cleanup.sh
 Restart=on-failure
 RestartSec=1s
 
-# --- Production hardening (commented out -- see parked review C7).
+# --- Production hardening (C7, ADR 0016). Commented out by default.
 #
-# The router does NOT call mlockall / sched_setscheduler / sched_setaffinity
-# today. These systemd directives are the recommended user-side wrapping
-# for a real Jetson production deployment. Uncomment + tune as needed.
+# Two complementary layers; enable per your hardware. All are opt-in so the
+# default deployment behaves exactly as before.
 #
-# MemoryLock=infinity        # mlock all pages; needs CAP_IPC_LOCK
-# CPUAffinity=2              # pin to an isolated core (cpuset.cpus list)
-# LimitRTPRIO=80             # allow SCHED_FIFO up to priority 80
+# (1) systemd-enforced limits/placement (recommended, no app cooperation):
+# MemoryLock=infinity        # allow mlockall; grants CAP_IPC_LOCK + RLIMIT_MEMLOCK
+# CPUAffinity=2              # pin to an isolated core (pair with isolcpus=)
+# LimitRTPRIO=80             # allow SCHED_FIFO up to priority 80 (see note)
 # Nice=-10                   # boost scheduling priority
+#
+# (2) in-process hooks the router calls when these env vars are set
+#     (router_app.h router_lock_memory() / router_pin_to_core(); ADR 0016).
+#     Useful when you want the lock/pin done from inside the process (e.g. to
+#     mlock AFTER the SHM rings are mapped). LimitRTPRIO above must still be
+#     set for any SCHED_FIFO wrapper; the router does NOT call
+#     sched_setscheduler itself (left to a systemd/exec wrapper by design).
+# Environment=RIM_MLOCK=1               # router calls mlockall(MCL_CURRENT|MCL_FUTURE)
+# Environment=RIM_CPU=2                 # router pins its thread to core 2
+# Environment=RIM_PRIORITY_DROP_FLOOR=4 # SHM: shed priority<4 frames on backpressure
 
 # Sandboxing (safe defaults; relax if your deployment needs more).
 NoNewPrivileges=yes

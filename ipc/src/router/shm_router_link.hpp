@@ -66,6 +66,18 @@ public:
 
     void set_recv_blocking() {}
 
+    // C7 (ADR 0016) — priority-aware drop-lowest-first under backpressure.
+    // `floor` is a minimum priority (0..7). While a destination ring is
+    // congested (its previous send hit a full ring), incoming frames whose
+    // 3-bit priority is below the floor are shed *before* attempting a send,
+    // reserving the ring's drain bandwidth for higher-priority traffic. SPSC
+    // is preserved — nothing already enqueued is evicted; we only decline to
+    // admit low-priority frames while the ring is backed up. floor == 0 (the
+    // default) disables the policy, so behavior is byte-for-byte the legacy
+    // unconditional drop-on-full. Congestion clears on the next successful send.
+    void set_priority_drop_floor(uint8_t floor) { priority_drop_floor_ = floor; }
+    uint8_t priority_drop_floor() const noexcept { return priority_drop_floor_; }
+
     ForwardResult forward(
         RouterFrame& frame,
         uint64_t timestamp_ns,
@@ -118,17 +130,29 @@ public:
 
     // Phase H — egress half of forward(), made public so the mixed router can
     // deliver frames that arrived on a different transport into a SHM ring.
-    // Drop-on-full per ADR 0006 (see the per-peer counters below).
+    // Drop-on-full per ADR 0006; C7 (ADR 0016) adds optional priority-aware
+    // drop-lowest-first via set_priority_drop_floor (off by default).
     void send_to_peer(uint8_t dest, const Buffer& payload) {
         for (auto& channel : peer_channels_) {
             if (channel.peer_id == dest) {
+                const uint8_t prio = priority_from_frame(payload);
+
+                // C7 — while this ring is backed up, shed sub-floor frames
+                // before touching the ring so high-priority frames win the
+                // next freed slot. floor == 0 disables (legacy behavior).
+                if (priority_drop_floor_ > 0 && channel.congested
+                    && prio < priority_drop_floor_) {
+                    record_drop(dest, prio);
+                    return;
+                }
+
                 if (try_send_shm_buffer(channel.endpoint, payload)
                     == ShmSendResult::Ok) {
+                    channel.congested = false;
                     metrics_->forwarded.fetch_add(1, std::memory_order_relaxed);
                 } else {
-                    metrics_->dropped_full.fetch_add(1, std::memory_order_relaxed);
-                    metrics_->dropped_full_per_peer[dest].fetch_add(
-                        1, std::memory_order_relaxed);
+                    channel.congested = true;
+                    record_drop(dest, prio);
                 }
                 return;
             }
@@ -179,7 +203,31 @@ private:
     struct PeerChannel {
         uint8_t peer_id;
         IpcEndpoint<ShmSpsc> endpoint;
+        // C7 — set when the last send to this ring hit a full ring; cleared on
+        // the next successful send. Gates the priority-aware drop-lowest-first.
+        bool congested = false;
     };
+
+    // C7 — read the 3-bit priority out of a serialized RouterFrame buffer.
+    // send_to_peer always receives full frame bytes (callers guarantee
+    // size >= kRouterFrameSize before egress), so the flags byte is present.
+    static uint8_t priority_from_frame(const Buffer& payload) {
+        if (payload.size < kRouterFrameSize) {
+            return 0;
+        }
+        const uint8_t flags =
+            static_cast<const uint8_t*>(payload.data)[kRouterFlagsOffset];
+        return static_cast<uint8_t>(
+            (flags & kFlagPriorityMask) >> kFlagPriorityShift);
+    }
+
+    void record_drop(uint8_t dest, uint8_t prio) {
+        metrics_->dropped_full.fetch_add(1, std::memory_order_relaxed);
+        metrics_->dropped_full_per_peer[dest].fetch_add(
+            1, std::memory_order_relaxed);
+        metrics_->dropped_by_priority[prio].fetch_add(
+            1, std::memory_order_relaxed);
+    }
 
     ShmRouterLink(const RouterTopology& topo, bool is_server, uint8_t peer_id)
         : topo_(topo), is_server_(is_server), peer_id_(peer_id) {}
@@ -199,6 +247,7 @@ private:
     const RouterTopology& topo_;
     bool is_server_;
     uint8_t peer_id_;
+    uint8_t priority_drop_floor_ = 0;  // C7 — 0 disables priority-aware drop
     IpcEndpoint<ShmSpsc> endpoint_;
     std::vector<PeerChannel> peer_channels_;
     std::unique_ptr<ShmRouterMetrics> metrics_ = std::make_unique<ShmRouterMetrics>();
