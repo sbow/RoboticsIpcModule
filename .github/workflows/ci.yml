@@ -1,16 +1,25 @@
-# Phase D — CI PR gate.
+# Phase D — CI PR gate. C3 (2026-06-03) — now a 2-arch matrix: x64 + aarch64.
 #
 # Build + run every test suite the local `make ci` target runs, on every
-# push to main and every pull request. Total wall time target: <= 3 min
-# on a standard GitHub-hosted ubuntu-latest runner (D-validation-stress.md
-# "CI wiring" budget).
+# push to main and every pull request, on BOTH x86_64 and native arm64
+# GitHub-hosted runners. arm64 closes parked review C3 ("the module is named
+# for Jetson/aarch64 but had never been built or run on aarch64 in CI").
+# GitHub provides free native arm64 Linux runners (ubuntu-24.04-arm, 4 vCPU)
+# for public repositories — no QEMU / cross-compile needed.
 #
-# What runs:
+# Note on representativeness: the arm64 runner is a Cobalt/Neoverse N2 server
+# core (Armv9), not a Jetson Orin Cortex-A78AE (Armv8.2 + L4T). It validates
+# the aarch64 ABI, 64-bit atomics, endianness, and the syscalls the router
+# uses (mlockall / sched_setaffinity / MSG_NOSIGNAL); the code has no SIMD /
+# Tegra-specific paths. On-actual-Jetson validation remains an out-of-band
+# operator check (cannot run inside GitHub-hosted CI regardless).
+#
+# What runs (per arch):
 #   - apt install build-essential + ccache + sysstat
-#   - ccache restore (keyed on Makefile + commit; falls through to OS prefix)
+#   - ccache restore (keyed on arch + Makefile + commit; OS prefix fallthrough)
 #   - make all                       (clean rebuild every binary)
-#   - make test-ipc-unit             (8 binaries, 652 assertions)
-#   - make test-ipc-integration      (5 binaries, 98 assertions)
+#   - make test-ipc-unit             (unit assertions, incl. C6/C7)
+#   - make test-ipc-integration      (integration scenarios)
 #   - make test-router               (UDS / UDP / SHM forward scenarios)
 #   - shm_leak_check.sh              (delta == 0 over the suite)
 #
@@ -41,11 +50,22 @@ concurrency:
 
 jobs:
   build-and-test:
-    name: build + test (gcc / ubuntu-latest)
-    runs-on: ubuntu-latest
-    # Surface hangs fast — the local job finishes well under 2 min, so 5
-    # min is a generous absolute ceiling.
-    timeout-minutes: 5
+    name: build + test (gcc / ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    # Surface hangs fast. x64 finishes well under 2 min; arm64 can queue a
+    # little longer, so 8 min is a generous absolute ceiling for both.
+    timeout-minutes: 8
+
+    strategy:
+      # Run both architectures to completion even if one fails — a red arch
+      # is itself the C3 signal, and we want to see the other's result too.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-latest      # x86_64 (ubuntu-24.04)
+          - arch: arm64
+            runner: ubuntu-24.04-arm   # native aarch64 (free on public repos)
 
     env:
       CXX: g++
@@ -70,10 +90,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.ccache
-          key: ${{ runner.os }}-ccache-${{ hashFiles('Makefile') }}-${{ github.sha }}
+          # Arch-scoped: x64 and arm64 object caches must never mix.
+          key: ${{ runner.os }}-${{ matrix.arch }}-ccache-${{ hashFiles('Makefile') }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-ccache-${{ hashFiles('Makefile') }}-
-            ${{ runner.os }}-ccache-
+            ${{ runner.os }}-${{ matrix.arch }}-ccache-${{ hashFiles('Makefile') }}-
+            ${{ runner.os }}-${{ matrix.arch }}-ccache-
 
       - name: Configure ccache
         run: |
@@ -110,7 +131,8 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-ipc-test-binaries
+          # Arch-suffixed so the two matrix legs don't collide on upload.
+          name: build-ipc-test-binaries-${{ matrix.arch }}
           path: build/ipc/test/
           retention-days: 7
           if-no-files-found: ignore
